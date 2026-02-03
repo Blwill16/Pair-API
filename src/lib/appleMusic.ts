@@ -1,6 +1,54 @@
 // Apple Music API Integration
 // Provides track search, metadata fetching, and catalog ingestion
 
+import * as jose from 'jose';
+
+// Apple Music Developer Token generation
+let cachedToken: { token: string; expiresAt: number } | null = null;
+
+async function getAppleMusicDeveloperToken(): Promise<string | null> {
+  // Check if we have a valid cached token
+  if (cachedToken && Date.now() < cachedToken.expiresAt) {
+    return cachedToken.token;
+  }
+
+  const privateKey = process.env.APPLE_MUSIC_PRIVATE_KEY;
+  const teamId = process.env.APPLE_MUSIC_TEAM_ID;
+  const keyId = process.env.APPLE_MUSIC_KEY_ID;
+
+  if (!privateKey || !teamId || !keyId) {
+    console.warn("Apple Music credentials not configured");
+    return null;
+  }
+
+  try {
+    // Parse the private key
+    const key = await jose.importPKCS8(privateKey, 'ES256');
+    
+    // Create JWT token
+    const now = Math.floor(Date.now() / 1000);
+    const expiresIn = 15777000; // ~6 months in seconds
+    
+    const token = await new jose.SignJWT({})
+      .setProtectedHeader({ alg: 'ES256', kid: keyId })
+      .setIssuer(teamId)
+      .setIssuedAt(now)
+      .setExpirationTime(now + expiresIn)
+      .sign(key);
+
+    // Cache the token (expire 1 hour before actual expiry for safety)
+    cachedToken = {
+      token,
+      expiresAt: Date.now() + (expiresIn - 3600) * 1000,
+    };
+
+    return token;
+  } catch (error) {
+    console.error("Error generating Apple Music token:", error);
+    return null;
+  }
+}
+
 export interface AppleMusicTrack {
   id: string;
   attributes: {
@@ -399,11 +447,10 @@ export async function searchAppleMusicTracks(query: string, limit: number = 20):
     ).slice(0, limit);
   }
 
-  // Real Apple Music API implementation would go here
-  // Requires Apple Music API key and developer token
-  const developerToken = process.env.APPLE_MUSIC_DEVELOPER_TOKEN;
+  // Get developer token (generated dynamically from private key)
+  const developerToken = await getAppleMusicDeveloperToken();
   if (!developerToken) {
-    console.warn("Apple Music API token not configured, using mock data");
+    console.warn("Apple Music API token not available, using mock data");
     return mockAppleMusicTracks.slice(0, limit);
   }
 
@@ -449,7 +496,7 @@ export async function getAppleMusicTrack(appleMusicId: string): Promise<PairTrac
     return mockAppleMusicTracks.find((t) => t.apple_music_id === appleMusicId) || null;
   }
 
-  const developerToken = process.env.APPLE_MUSIC_DEVELOPER_TOKEN;
+  const developerToken = await getAppleMusicDeveloperToken();
   if (!developerToken) {
     return mockAppleMusicTracks.find((t) => t.apple_music_id === appleMusicId) || null;
   }

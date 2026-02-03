@@ -17,12 +17,180 @@ import {
   ScoredCandidate,
 } from "@/lib/pairing";
 import { supabase } from "@/lib/supabase";
+import { getAppleMusicTrack, searchAppleMusicTracks, getMockCandidates, PairTrack } from "@/lib/appleMusic";
+import { getVibeSimilarity } from "@/lib/embeddings";
+
+// Use Apple Music if credentials are configured
+const USE_APPLE_MUSIC = process.env.APPLE_MUSIC_PRIVATE_KEY && process.env.APPLE_MUSIC_TEAM_ID && process.env.APPLE_MUSIC_KEY_ID;
 
 interface PairRequest {
   userId?: string;
   seedTrackId: string;
   prompt?: string;
   mode: PairingMode;
+}
+
+// Apple Music pairing logic
+async function generateAppleMusicPairing(
+  seedTrackId: string,
+  prompt: string,
+  mode: PairingMode,
+  userId?: string
+) {
+  // Get seed track from Apple Music
+  const seedTrack = await getAppleMusicTrack(seedTrackId);
+  if (!seedTrack) {
+    throw new Error("Seed track not found");
+  }
+
+  // Get owned track IDs to exclude
+  const ownedTrackIds: Set<string> = new Set();
+  if (userId) {
+    try {
+      const { data: savedTracks } = await supabase
+        .from("saved_tracks")
+        .select("track_id")
+        .eq("user_id", userId);
+      
+      if (savedTracks) {
+        for (const track of savedTracks) {
+          ownedTrackIds.add(track.track_id);
+        }
+      }
+    } catch (error) {
+      console.error("Error fetching owned tracks:", error);
+    }
+  }
+
+  // Get candidate tracks (excluding seed and owned)
+  const excludeIds = [seedTrackId, ...Array.from(ownedTrackIds)];
+  const candidates = getMockCandidates(excludeIds);
+
+  // Score candidates based on mode
+  const MODE_WEIGHTS: Record<PairingMode, { sound: number; vibe: number; novelty: number }> = {
+    same_sound: { sound: 0.70, vibe: 0.15, novelty: 0.15 },
+    same_vibe: { sound: 0.45, vibe: 0.40, novelty: 0.15 },
+    same_scene: { sound: 0.35, vibe: 0.25, novelty: 0.40 },
+    adventure: { sound: 0.35, vibe: 0.35, novelty: 0.30 },
+  };
+
+  const weights = MODE_WEIGHTS[mode];
+  const scoredCandidates: Array<{ track: PairTrack; score: number; explanation: string }> = [];
+
+  for (const candidate of candidates) {
+    // Compute sound similarity based on audio features
+    const soundSimilarity = computeAppleMusicSoundSimilarity(seedTrack, candidate);
+    
+    // Compute vibe similarity using embeddings
+    const seedText = `${seedTrack.track_name} ${seedTrack.artist_name} ${seedTrack.genres?.join(" ") || ""}`;
+    const candidateText = `${candidate.track_name} ${candidate.artist_name} ${candidate.genres?.join(" ") || ""}`;
+    const vibeSimilarity = await getVibeSimilarity(prompt || seedText, candidateText);
+
+    // Compute novelty score
+    const noveltyScore = mode === "adventure" 
+      ? (soundSimilarity >= 0.55 && soundSimilarity <= 0.80 ? 1.0 : 0.5)
+      : Math.max(0, Math.min(1, 1 - soundSimilarity));
+
+    const finalScore = weights.sound * soundSimilarity + weights.vibe * vibeSimilarity + weights.novelty * noveltyScore;
+    const explanation = generateAppleMusicExplanation(seedTrack, candidate, vibeSimilarity);
+
+    scoredCandidates.push({ track: candidate, score: finalScore, explanation });
+  }
+
+  // Sort by score and take top 20
+  scoredCandidates.sort((a, b) => b.score - a.score);
+  
+  // Apply diversity rule: max 2 tracks per artist
+  const artistCounts = new Map<string, number>();
+  const diversified: typeof scoredCandidates = [];
+  for (const candidate of scoredCandidates) {
+    const artist = candidate.track.artist_name;
+    const count = artistCounts.get(artist) || 0;
+    if (count < 2) {
+      diversified.push(candidate);
+      artistCounts.set(artist, count + 1);
+    }
+    if (diversified.length >= 20) break;
+  }
+
+  return {
+    seed: {
+      track_id: seedTrack.apple_music_id,
+      track_name: seedTrack.track_name,
+      artist_name: seedTrack.artist_name,
+      album_art_url: seedTrack.album_art_url,
+      preview_url: seedTrack.preview_url,
+      spotify_url: `https://music.apple.com/us/song/${seedTrack.apple_music_id}`,
+    },
+    results: diversified.map(r => ({
+      track_id: r.track.apple_music_id,
+      track_name: r.track.track_name,
+      artist_name: r.track.artist_name,
+      album_art_url: r.track.album_art_url,
+      preview_url: r.track.preview_url,
+      spotify_url: `https://music.apple.com/us/song/${r.track.apple_music_id}`,
+      score: r.score,
+      explanation: r.explanation,
+    })),
+  };
+}
+
+function computeAppleMusicSoundSimilarity(seed: PairTrack, candidate: PairTrack): number {
+  const features = ['energy', 'valence', 'danceability', 'acousticness', 'tempo'] as const;
+  let dotProduct = 0;
+  let normSeed = 0;
+  let normCandidate = 0;
+
+  for (const feature of features) {
+    const seedVal = seed[feature] ?? 0.5;
+    const candidateVal = candidate[feature] ?? 0.5;
+    // Normalize tempo to 0-1 range
+    const normalizedSeed = feature === 'tempo' ? Math.max(0, Math.min(1, (seedVal - 60) / 120)) : seedVal;
+    const normalizedCandidate = feature === 'tempo' ? Math.max(0, Math.min(1, (candidateVal - 60) / 120)) : candidateVal;
+    
+    dotProduct += normalizedSeed * normalizedCandidate;
+    normSeed += normalizedSeed * normalizedSeed;
+    normCandidate += normalizedCandidate * normalizedCandidate;
+  }
+
+  if (normSeed === 0 || normCandidate === 0) return 0;
+  return dotProduct / (Math.sqrt(normSeed) * Math.sqrt(normCandidate));
+}
+
+function generateAppleMusicExplanation(seed: PairTrack, candidate: PairTrack, vibeSimilarity: number): string {
+  const descriptors: Record<string, string[]> = {
+    energy: ["driving intensity", "raw power", "electric feel"],
+    valence: ["emotional tone", "uplifting spirit", "introspective feel"],
+    danceability: ["infectious rhythm", "body-moving beat", "danceable pulse"],
+    acousticness: ["organic texture", "warm tones", "intimate sound"],
+    tempo: ["smooth pace", "steady flow", "matching rhythm"],
+  };
+
+  const emotionalPhrases = ["perfect for the moment", "hits the same way", "carries that feeling"];
+
+  // Find most similar feature
+  const features = ['energy', 'valence', 'danceability', 'acousticness', 'tempo'] as const;
+  type FeatureType = typeof features[number];
+  let bestFeature: FeatureType = features[0];
+  let bestDiff = Infinity;
+
+  for (const feature of features) {
+    const seedVal = seed[feature] ?? 0.5;
+    const candidateVal = candidate[feature] ?? 0.5;
+    const diff = Math.abs(seedVal - candidateVal);
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      bestFeature = feature;
+    }
+  }
+
+  const descriptor = descriptors[bestFeature][Math.floor(Math.random() * 3)];
+  const emotional = emotionalPhrases[Math.floor(Math.random() * emotionalPhrases.length)];
+
+  if (vibeSimilarity > 0.6) {
+    return `${descriptor} — ${emotional}`;
+  }
+  return `Shares that ${descriptor}`;
 }
 
 export async function POST(request: NextRequest) {
@@ -44,6 +212,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Use Apple Music if credentials are configured
+    if (USE_APPLE_MUSIC) {
+      const result = await generateAppleMusicPairing(seedTrackId, prompt, mode, userId);
+      return NextResponse.json(result);
+    }
+
+    // Fall back to Spotify mock data
     const seedTrack = await getTrack(seedTrackId);
     const [seedFeaturesArray] = await Promise.all([
       getAudioFeatures([seedTrackId]),
