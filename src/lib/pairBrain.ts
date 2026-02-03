@@ -94,7 +94,8 @@ function generateReason(
 
   // Find the most similar feature
   const features = ["energy", "valence", "danceability", "acousticness", "tempo"] as const;
-  let bestFeature = features[0];
+  type FeatureType = typeof features[number];
+  let bestFeature: FeatureType = features[0];
   let bestDiff = Infinity;
 
   for (const feature of features) {
@@ -129,7 +130,8 @@ async function getOwnedTrackIds(userId: string): Promise<Set<string>> {
 
     if (libraryTracks) {
       for (const item of libraryTracks) {
-        const pairTrack = item.pair_tracks as { apple_music_id: string } | null;
+        const trackData = item.pair_tracks as unknown;
+        const pairTrack = (Array.isArray(trackData) ? trackData[0] : trackData) as { apple_music_id: string } | null;
         if (pairTrack?.apple_music_id) {
           ownedIds.add(pairTrack.apple_music_id);
         }
@@ -392,7 +394,8 @@ export async function computeTasteVector(userId: string): Promise<void> {
     let count = 0;
 
     for (const event of positiveEvents) {
-      const track = event.pair_tracks as {
+      const trackData = event.pair_tracks as unknown;
+      const track = (Array.isArray(trackData) ? trackData[0] : trackData) as {
         energy: number;
         valence: number;
         danceability: number;

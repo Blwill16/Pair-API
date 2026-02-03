@@ -227,7 +227,8 @@ async function processReleaseRadar(): Promise<{ matched: number; notified: numbe
 
   // Match each candidate against each user's taste
   for (const candidate of candidates) {
-    const track = candidate.pair_tracks as PairTrack | null;
+    const trackData = candidate.pair_tracks as unknown;
+    const track = (Array.isArray(trackData) ? trackData[0] : trackData) as PairTrack | null;
     if (!track) continue;
 
     for (const taste of tasteVectors) {
@@ -319,7 +320,8 @@ async function sendPushNotifications(): Promise<number> {
     // Build notification payload
     const trackNames = matches
       .map((m) => {
-        const track = m.pair_tracks as { track_name: string; artist_name: string } | null;
+        const trackData = m.pair_tracks as unknown;
+        const track = (Array.isArray(trackData) ? trackData[0] : trackData) as { track_name: string; artist_name: string } | null;
         return track ? `${track.track_name} by ${track.artist_name}` : null;
       })
       .filter(Boolean)
