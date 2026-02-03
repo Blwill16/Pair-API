@@ -160,24 +160,48 @@ function generateExplanation(
   soundSimilarity: number,
   vibeSimilarity: number
 ): string {
-  const featureNames: Record<keyof NormalizedFeatures, string> = {
-    danceability: "danceability",
-    energy: "energy",
-    valence: "mood",
-    tempo: "tempo",
-    acousticness: "acoustic feel",
-    instrumentalness: "instrumental quality",
-    loudness: "intensity",
+  const featureDescriptors: Record<keyof NormalizedFeatures, { name: string; emotional: string[] }> = {
+    danceability: { 
+      name: "groove", 
+      emotional: ["infectious rhythm", "body-moving beat", "danceable pulse"] 
+    },
+    energy: { 
+      name: "energy", 
+      emotional: ["driving intensity", "raw power", "electric feel"] 
+    },
+    valence: { 
+      name: "mood", 
+      emotional: ["emotional tone", "introspective feel", "uplifting spirit"] 
+    },
+    tempo: { 
+      name: "tempo", 
+      emotional: ["smooth pace", "steady flow", "matching rhythm"] 
+    },
+    acousticness: { 
+      name: "acoustic warmth", 
+      emotional: ["organic texture", "warm tones", "intimate sound"] 
+    },
+    instrumentalness: { 
+      name: "instrumental depth", 
+      emotional: ["layered soundscape", "rich instrumentation", "sonic depth"] 
+    },
+    loudness: { 
+      name: "intensity", 
+      emotional: ["bold presence", "dynamic range", "powerful delivery"] 
+    },
   };
 
+  const emotionalPhrases = [
+    "perfect for the moment",
+    "hits the same way",
+    "carries that feeling",
+    "captures the essence",
+    "fits right in",
+  ];
+
   const features: (keyof NormalizedFeatures)[] = [
-    "danceability",
-    "energy",
-    "valence",
-    "tempo",
-    "acousticness",
-    "instrumentalness",
-    "loudness",
+    "danceability", "energy", "valence", "tempo", 
+    "acousticness", "instrumentalness", "loudness",
   ];
 
   const similarities: { feature: keyof NormalizedFeatures; diff: number }[] = features.map((f) => ({
@@ -186,18 +210,27 @@ function generateExplanation(
   }));
 
   similarities.sort((a, b) => a.diff - b.diff);
-  const topTwo = similarities.slice(0, 2);
+  const topFeature = similarities[0].feature;
+  
+  const descriptor = featureDescriptors[topFeature];
+  const emotionalChoice = descriptor.emotional[Math.floor(Math.random() * descriptor.emotional.length)];
+  
+  const templates = [
+    `${emotionalChoice} with matching ${descriptor.name}`,
+    `Shares that ${emotionalChoice}`,
+    `${descriptor.name.charAt(0).toUpperCase() + descriptor.name.slice(1)} and ${emotionalChoice}`,
+  ];
+  
+  let explanation = templates[Math.floor(Math.random() * templates.length)];
 
-  let explanation = `Similar ${featureNames[topTwo[0].feature]} and ${featureNames[topTwo[1].feature]}`;
-
-  if (prompt && prompt.trim() !== "" && vibeSimilarity > 0.6) {
-    const keywords = prompt.split(" ").filter((w) => w.length > 3).slice(0, 2);
-    if (keywords.length > 0) {
-      explanation += `; matches the ${keywords.join(" ")} vibe`;
-    }
+  if (prompt && prompt.trim() !== "" && vibeSimilarity > 0.5) {
+    const promptPhrases = [
+      `— ${emotionalPhrases[Math.floor(Math.random() * emotionalPhrases.length)]}`,
+      ` that ${emotionalPhrases[Math.floor(Math.random() * emotionalPhrases.length)]}`,
+    ];
+    explanation += promptPhrases[Math.floor(Math.random() * promptPhrases.length)];
   }
 
-  explanation += ".";
   return explanation;
 }
 
