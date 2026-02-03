@@ -1,6 +1,22 @@
+import {
+  mockSearchTracks,
+  mockGetTrack,
+  mockGetAudioFeatures,
+  mockGetRecommendations,
+  mockGetRelatedArtists,
+  mockGetArtistTopTracks,
+  mockGetArtistGenres,
+} from "./mockData";
+
+const MOCK_MODE = process.env.MOCK_SPOTIFY === "true";
+
 let cachedToken: { token: string; expiresAt: number } | null = null;
 
 export async function getSpotifyToken(): Promise<string> {
+  if (MOCK_MODE) {
+    return "mock_token";
+  }
+
   if (cachedToken && Date.now() < cachedToken.expiresAt) {
     return cachedToken.token;
   }
@@ -56,6 +72,10 @@ export interface AudioFeatures {
 }
 
 export async function searchTracks(query: string, limit: number = 10): Promise<SpotifyTrack[]> {
+  if (MOCK_MODE) {
+    return mockSearchTracks(query, limit);
+  }
+
   const token = await getSpotifyToken();
   
   const response = await fetch(
@@ -83,6 +103,10 @@ export async function searchTracks(query: string, limit: number = 10): Promise<S
 }
 
 export async function getAudioFeatures(trackIds: string[]): Promise<AudioFeatures[]> {
+  if (MOCK_MODE) {
+    return mockGetAudioFeatures(trackIds);
+  }
+
   const token = await getSpotifyToken();
   
   const response = await fetch(
@@ -113,6 +137,14 @@ export async function getAudioFeatures(trackIds: string[]): Promise<AudioFeature
 }
 
 export async function getTrack(trackId: string): Promise<SpotifyTrack> {
+  if (MOCK_MODE) {
+    const track = mockGetTrack(trackId);
+    if (!track) {
+      throw new Error(`Track not found: ${trackId}`);
+    }
+    return track;
+  }
+
   const token = await getSpotifyToken();
   
   const response = await fetch(
@@ -143,6 +175,10 @@ export async function getRecommendations(
   seedTrackId: string,
   limit: number = 100
 ): Promise<SpotifyTrack[]> {
+  if (MOCK_MODE) {
+    return mockGetRecommendations(seedTrackId, limit);
+  }
+
   const token = await getSpotifyToken();
   
   const response = await fetch(
@@ -170,6 +206,10 @@ export async function getRecommendations(
 }
 
 export async function getRelatedArtists(artistId: string): Promise<string[]> {
+  if (MOCK_MODE) {
+    return mockGetRelatedArtists(artistId);
+  }
+
   const token = await getSpotifyToken();
   
   const response = await fetch(
@@ -188,6 +228,10 @@ export async function getRelatedArtists(artistId: string): Promise<string[]> {
 }
 
 export async function getArtistTopTracks(artistId: string): Promise<SpotifyTrack[]> {
+  if (MOCK_MODE) {
+    return mockGetArtistTopTracks(artistId);
+  }
+
   const token = await getSpotifyToken();
   
   const response = await fetch(
@@ -215,6 +259,10 @@ export async function getArtistTopTracks(artistId: string): Promise<SpotifyTrack
 }
 
 export async function getArtistGenres(artistId: string): Promise<string[]> {
+  if (MOCK_MODE) {
+    return mockGetArtistGenres(artistId);
+  }
+
   const token = await getSpotifyToken();
   
   const response = await fetch(
