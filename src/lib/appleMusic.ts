@@ -555,4 +555,75 @@ export function getMockCandidates(excludeIds: string[] = []): PairTrack[] {
   return mockAppleMusicTracks.filter((t) => !excludeIds.includes(t.apple_music_id));
 }
 
+// Get related tracks from Apple Music based on seed track
+export async function getAppleMusicRelatedTracks(
+  seedTrack: PairTrack,
+  excludeIds: string[] = [],
+  limit: number = 25
+): Promise<PairTrack[]> {
+  if (MOCK_APPLE_MUSIC) {
+    return mockAppleMusicTracks.filter((t) => !excludeIds.includes(t.apple_music_id)).slice(0, limit);
+  }
+
+  const developerToken = await getAppleMusicDeveloperToken();
+  if (!developerToken) {
+    return mockAppleMusicTracks.filter((t) => !excludeIds.includes(t.apple_music_id)).slice(0, limit);
+  }
+
+  const candidates: PairTrack[] = [];
+  const seenIds = new Set(excludeIds);
+
+  try {
+    // Strategy 1: Search by artist name to get more tracks from same/similar artists
+    const artistResults = await searchAppleMusicTracks(seedTrack.artist_name, 15);
+    for (const track of artistResults) {
+      if (!seenIds.has(track.apple_music_id)) {
+        candidates.push(track);
+        seenIds.add(track.apple_music_id);
+      }
+    }
+
+    // Strategy 2: Search by genre keywords if available
+    if (seedTrack.genres && seedTrack.genres.length > 0) {
+      for (const genre of seedTrack.genres.slice(0, 2)) {
+        const genreResults = await searchAppleMusicTracks(genre, 10);
+        for (const track of genreResults) {
+          if (!seenIds.has(track.apple_music_id)) {
+            candidates.push(track);
+            seenIds.add(track.apple_music_id);
+          }
+        }
+      }
+    }
+
+    // Strategy 3: Search by similar track name keywords
+    const trackWords = seedTrack.track_name.split(' ').filter(w => w.length > 3);
+    if (trackWords.length > 0) {
+      const keywordResults = await searchAppleMusicTracks(trackWords[0], 10);
+      for (const track of keywordResults) {
+        if (!seenIds.has(track.apple_music_id)) {
+          candidates.push(track);
+          seenIds.add(track.apple_music_id);
+        }
+      }
+    }
+
+    // Strategy 4: Add some popular tracks for variety
+    const popularSearches = ['top hits', 'popular', 'trending'];
+    const randomSearch = popularSearches[Math.floor(Math.random() * popularSearches.length)];
+    const popularResults = await searchAppleMusicTracks(randomSearch, 10);
+    for (const track of popularResults) {
+      if (!seenIds.has(track.apple_music_id)) {
+        candidates.push(track);
+        seenIds.add(track.apple_music_id);
+      }
+    }
+
+    return candidates.slice(0, limit);
+  } catch (error) {
+    console.error("Error getting related tracks:", error);
+    return mockAppleMusicTracks.filter((t) => !excludeIds.includes(t.apple_music_id)).slice(0, limit);
+  }
+}
+
 export { mockAppleMusicTracks };

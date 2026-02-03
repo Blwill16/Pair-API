@@ -17,7 +17,7 @@ import {
   ScoredCandidate,
 } from "@/lib/pairing";
 import { supabase } from "@/lib/supabase";
-import { getAppleMusicTrack, searchAppleMusicTracks, getMockCandidates, PairTrack } from "@/lib/appleMusic";
+import { getAppleMusicTrack, searchAppleMusicTracks, getMockCandidates, getAppleMusicRelatedTracks, PairTrack } from "@/lib/appleMusic";
 import { getVibeSimilarity } from "@/lib/embeddings";
 
 // Helper function to check Apple Music credentials at runtime
@@ -66,7 +66,7 @@ async function generateAppleMusicPairing(
 
   // Get candidate tracks (excluding seed and owned)
   const excludeIds = [seedTrackId, ...Array.from(ownedTrackIds)];
-  const candidates = getMockCandidates(excludeIds);
+  const candidates = await getAppleMusicRelatedTracks(seedTrack, excludeIds, 30);
 
   // Score candidates based on mode
   const MODE_WEIGHTS: Record<PairingMode, { sound: number; vibe: number; novelty: number }> = {
