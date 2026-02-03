@@ -36,10 +36,7 @@ export async function GET(request: NextRequest) {
 
     const { data: playlists, error: playlistError } = await supabase
       .from("playlists")
-      .select(`
-        *,
-        profiles:owner_id (user_id, username, display_name, avatar_url)
-      `)
+      .select("*")
       .in("owner_id", followeeIds)
       .eq("is_public", true)
       .order("created_at", { ascending: false })

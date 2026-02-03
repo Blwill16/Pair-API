@@ -117,11 +117,7 @@ export async function GET(request: NextRequest) {
 
     let query = supabase
       .from("playlists")
-      .select(`
-        *,
-        profiles:owner_id (username, display_name, avatar_url),
-        playlist_likes (count)
-      `)
+      .select("*")
       .order("created_at", { ascending: false })
       .range(offset, offset + limit - 1);
 
