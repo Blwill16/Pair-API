@@ -310,9 +310,24 @@ export function mockGetTrack(trackId: string): SpotifyTrack | null {
 }
 
 export function mockGetAudioFeatures(trackIds: string[]): AudioFeatures[] {
-  return trackIds
-    .map((id) => MOCK_AUDIO_FEATURES[id])
-    .filter((f): f is AudioFeatures => f !== undefined);
+  return trackIds.map((id) => {
+    // Return existing mock features if available
+    if (MOCK_AUDIO_FEATURES[id]) {
+      return MOCK_AUDIO_FEATURES[id];
+    }
+    // Generate consistent mock features for unknown track IDs
+    const hash = id.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    return {
+      track_id: id,
+      danceability: 0.4 + (hash % 40) / 100,
+      energy: 0.4 + ((hash * 2) % 40) / 100,
+      valence: 0.3 + ((hash * 3) % 50) / 100,
+      tempo: 80 + (hash % 80),
+      acousticness: 0.1 + ((hash * 4) % 30) / 100,
+      instrumentalness: ((hash * 5) % 20) / 100,
+      loudness: -10 + ((hash * 6) % 5),
+    };
+  });
 }
 
 export function mockGetRecommendations(seedTrackId: string, limit: number = 100): SpotifyTrack[] {
