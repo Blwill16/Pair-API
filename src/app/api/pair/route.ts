@@ -60,9 +60,50 @@ export async function POST(request: NextRequest) {
 
     const candidates: Map<string, SpotifyTrack> = new Map();
 
+    // Taste-preserving filter: get user's owned tracks to exclude from discovery
+    const ownedTrackIds: Set<string> = new Set();
+    if (userId) {
+      try {
+        // Get saved tracks
+        const { data: savedTracks } = await supabase
+          .from("saved_tracks")
+          .select("track_id")
+          .eq("user_id", userId);
+        
+        if (savedTracks) {
+          for (const track of savedTracks) {
+            ownedTrackIds.add(track.track_id);
+          }
+        }
+
+        // Get tracks from user's playlists
+        const { data: userPlaylists } = await supabase
+          .from("playlists")
+          .select("id")
+          .eq("owner_id", userId);
+        
+        if (userPlaylists && userPlaylists.length > 0) {
+          const playlistIds = userPlaylists.map(p => p.id);
+          const { data: playlistTracks } = await supabase
+            .from("playlist_tracks")
+            .select("track_id")
+            .in("playlist_id", playlistIds);
+          
+          if (playlistTracks) {
+            for (const track of playlistTracks) {
+              ownedTrackIds.add(track.track_id);
+            }
+          }
+        }
+      } catch (error) {
+        console.error("Error fetching owned tracks:", error);
+      }
+    }
+
     const recommendations = await getRecommendations(seedTrackId, 100);
     for (const track of recommendations) {
-      if (track.track_id !== seedTrackId) {
+      // Exclude seed track and any tracks the user already owns
+      if (track.track_id !== seedTrackId && !ownedTrackIds.has(track.track_id)) {
         candidates.set(track.track_id, track);
       }
     }
@@ -74,7 +115,8 @@ export async function POST(request: NextRequest) {
         relatedArtistIds.add(artistId);
         const topTracks = await getArtistTopTracks(artistId);
         for (const track of topTracks) {
-          if (track.track_id !== seedTrackId && !candidates.has(track.track_id)) {
+          // Exclude seed track, already added tracks, and owned tracks
+          if (track.track_id !== seedTrackId && !candidates.has(track.track_id) && !ownedTrackIds.has(track.track_id)) {
             candidates.set(track.track_id, track);
           }
         }
