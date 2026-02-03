@@ -20,8 +20,10 @@ import { supabase } from "@/lib/supabase";
 import { getAppleMusicTrack, searchAppleMusicTracks, getMockCandidates, PairTrack } from "@/lib/appleMusic";
 import { getVibeSimilarity } from "@/lib/embeddings";
 
-// Use Apple Music if credentials are configured
-const USE_APPLE_MUSIC = process.env.APPLE_MUSIC_PRIVATE_KEY && process.env.APPLE_MUSIC_TEAM_ID && process.env.APPLE_MUSIC_KEY_ID;
+// Helper function to check Apple Music credentials at runtime
+function useAppleMusic(): boolean {
+  return !!(process.env.APPLE_MUSIC_PRIVATE_KEY && process.env.APPLE_MUSIC_TEAM_ID && process.env.APPLE_MUSIC_KEY_ID);
+}
 
 interface PairRequest {
   userId?: string;
@@ -213,7 +215,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Use Apple Music if credentials are configured
-    if (USE_APPLE_MUSIC) {
+    if (useAppleMusic()) {
       const result = await generateAppleMusicPairing(seedTrackId, prompt, mode, userId);
       return NextResponse.json(result);
     }

@@ -2,9 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { searchTracks } from "@/lib/spotify";
 import { searchAppleMusicTracks } from "@/lib/appleMusic";
 
-// Use Apple Music if credentials are configured, otherwise fall back to Spotify mock
-const USE_APPLE_MUSIC = process.env.APPLE_MUSIC_PRIVATE_KEY && process.env.APPLE_MUSIC_TEAM_ID && process.env.APPLE_MUSIC_KEY_ID;
-
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
@@ -17,7 +14,10 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    if (USE_APPLE_MUSIC) {
+    // Check Apple Music credentials at runtime
+    const useAppleMusic = process.env.APPLE_MUSIC_PRIVATE_KEY && process.env.APPLE_MUSIC_TEAM_ID && process.env.APPLE_MUSIC_KEY_ID;
+
+    if (useAppleMusic) {
       // Use Apple Music API
       const appleMusicTracks = await searchAppleMusicTracks(query, 10);
       // Transform to match the existing track format expected by iOS app

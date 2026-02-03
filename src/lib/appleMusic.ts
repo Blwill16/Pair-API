@@ -12,13 +12,24 @@ async function getAppleMusicDeveloperToken(): Promise<string | null> {
     return cachedToken.token;
   }
 
-  const privateKey = process.env.APPLE_MUSIC_PRIVATE_KEY;
+  let privateKey = process.env.APPLE_MUSIC_PRIVATE_KEY;
   const teamId = process.env.APPLE_MUSIC_TEAM_ID;
   const keyId = process.env.APPLE_MUSIC_KEY_ID;
 
   if (!privateKey || !teamId || !keyId) {
     console.warn("Apple Music credentials not configured");
     return null;
+  }
+
+  // Handle different private key formats from environment variables
+  // Vercel might store with literal \n or actual newlines
+  if (privateKey.includes('\\n')) {
+    privateKey = privateKey.replace(/\\n/g, '\n');
+  }
+  
+  // Ensure proper PEM format
+  if (!privateKey.includes('-----BEGIN')) {
+    privateKey = `-----BEGIN PRIVATE KEY-----\n${privateKey}\n-----END PRIVATE KEY-----`;
   }
 
   try {
