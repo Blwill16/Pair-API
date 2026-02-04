@@ -549,9 +549,12 @@ async function generateCandidates(
   const sanitizedArtist = sanitizeSearchQuery(seedTrack.artist_name);
   console.log(`Generating candidates for: ${seedTrack.track_name} by ${seedTrack.artist_name} (sanitized: ${sanitizedArtist}) (mode: ${mode})`);
 
+  // Apple Music API has a max limit of 25 results per search
+  const APPLE_MUSIC_LIMIT = 25;
+  
   try {
     // STRATEGY 1: Same artist deep cuts (30% of candidates)
-    const artistTracks = await searchAppleMusicTracks(sanitizedArtist, 50);
+    const artistTracks = await searchAppleMusicTracks(sanitizedArtist, APPLE_MUSIC_LIMIT);
     console.log(`Search returned ${artistTracks.length} tracks for artist "${sanitizedArtist}"`);
     if (artistTracks.length > 0) {
       console.log(`First track genres: ${JSON.stringify(artistTracks[0].genres)}`);
@@ -568,7 +571,7 @@ async function generateCandidates(
       `artists like ${sanitizedArtist}`,
     ];
     for (const query of relatedQueries) {
-      const relatedTracks = await searchAppleMusicTracks(query, 40);
+      const relatedTracks = await searchAppleMusicTracks(query, APPLE_MUSIC_LIMIT);
       for (const track of relatedTracks) {
         if (candidates.length >= 120) break;
         addCandidate(track);
@@ -581,7 +584,7 @@ async function generateCandidates(
       const releaseYear = seedTrack.release_date?.substring(0, 4);
       for (const genre of seedTrack.genres.slice(0, 3)) {
         const genreQuery = releaseYear ? `${genre} ${releaseYear}s` : genre;
-        const genreTracks = await searchAppleMusicTracks(genreQuery, 40);
+        const genreTracks = await searchAppleMusicTracks(genreQuery, APPLE_MUSIC_LIMIT);
         for (const track of genreTracks) {
           if (candidates.length >= 200) break;
           addCandidate(track);
@@ -594,7 +597,7 @@ async function generateCandidates(
     if (mode === "adventure" && seedTrack.genres) {
       const adjacentGenres = getAdjacentGenres(seedTrack.genres);
       for (const genre of adjacentGenres.slice(0, 3)) {
-        const adjacentTracks = await searchAppleMusicTracks(genre, 30);
+        const adjacentTracks = await searchAppleMusicTracks(genre, APPLE_MUSIC_LIMIT);
         for (const track of adjacentTracks) {
           if (candidates.length >= 280) break;
           addCandidate(track);
@@ -606,7 +609,7 @@ async function generateCandidates(
     // STRATEGY 5: Seed track name variations
     const trackWords = seedTrack.track_name.split(/\s+/).filter(w => w.length > 3);
     for (const word of trackWords.slice(0, 2)) {
-      const wordTracks = await searchAppleMusicTracks(word, 30);
+      const wordTracks = await searchAppleMusicTracks(word, APPLE_MUSIC_LIMIT);
       for (const track of wordTracks) {
         if (candidates.length >= 350) break;
         addCandidate(track);
@@ -617,7 +620,7 @@ async function generateCandidates(
     // STRATEGY 6: Fill with broader genre search
     if (candidates.length < 200 && seedTrack.genres && seedTrack.genres.length > 0) {
       const primaryGenre = seedTrack.genres[0];
-      const fillTracks = await searchAppleMusicTracks(`${primaryGenre} music`, 100);
+      const fillTracks = await searchAppleMusicTracks(`${primaryGenre} music`, APPLE_MUSIC_LIMIT);
       for (const track of fillTracks) {
         if (candidates.length >= 400) break;
         addCandidate(track);
@@ -916,7 +919,7 @@ export async function generatePairing(input: PairingInput): Promise<PairingResul
     const sanitizedArtist = sanitizeSearchQuery(seedTrack.artist_name);
     console.log("Still no candidates, searching for seed artist tracks...");
     console.log(`Searching for: "${sanitizedArtist}" (original: "${seedTrack.artist_name}")`);
-    const artistTracks = await searchAppleMusicTracks(sanitizedArtist, 50);
+    const artistTracks = await searchAppleMusicTracks(sanitizedArtist, 25);
     for (const track of artistTracks) {
       if (track.apple_music_id !== seedTrack.apple_music_id) {
         candidates.push(track);
