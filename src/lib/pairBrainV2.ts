@@ -484,6 +484,7 @@ async function generateCandidates(
   // Add seed to exclusions
   seenIds.add(seedTrack.apple_music_id);
   
+  let genreFilteredCount = 0;
   const addCandidate = (track: PairTrack, requireGenreMatch: boolean = true): boolean => {
     if (seenIds.has(track.apple_music_id)) return false;
     if (shouldExclude(track.apple_music_id, exclusions)) return false;
@@ -491,6 +492,7 @@ async function generateCandidates(
     // HARD FILTER: Reject tracks from incompatible genres (unless adventure mode)
     if (requireGenreMatch && mode !== "adventure") {
       if (!areGenresCompatible(seedTrack.genres, track.genres)) {
+        genreFilteredCount++;
         return false;
       }
     }
@@ -573,7 +575,7 @@ async function generateCandidates(
       }
     }
 
-    console.log(`Final candidate count: ${candidates.length}`);
+    console.log(`Final candidate count: ${candidates.length} (filtered ${genreFilteredCount} by genre)`);
     return candidates;
   } catch (error) {
     console.error("Error generating candidates:", error);
@@ -833,6 +835,8 @@ export async function generatePairing(input: PairingInput): Promise<PairingResul
     throw new Error(`Seed track not found: ${seed_track_apple_id}`);
   }
   console.log(`Seed: ${seedTrack.track_name} by ${seedTrack.artist_name}`);
+  console.log(`Seed genres: ${seedTrack.genres?.join(", ") || "NONE"}`);
+  console.log(`Seed release date: ${seedTrack.release_date || "UNKNOWN"}`);
 
   // Get exclusion sets
   const exclusions = await getExclusionSets(user_id || "", session_id);
