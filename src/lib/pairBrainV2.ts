@@ -3,7 +3,6 @@
 // No third-party similarity APIs. Apple Music is catalog only. Pair owns taste.
 
 import { PairTrack, getAppleMusicTrack, searchAppleMusicTracks } from "./appleMusic";
-import { getVibeSimilarity } from "./embeddings";
 import { supabase } from "./supabase";
 
 // ============================================================================
@@ -317,18 +316,36 @@ function computeAudioSimilarity(seed: PairTrack, candidate: PairTrack): number {
   return dotProduct / (Math.sqrt(normSeed) * Math.sqrt(normCandidate));
 }
 
-async function computeTextSimilarity(
+function computeTextSimilarity(
   seedTrack: PairTrack,
   candidate: PairTrack,
   promptText?: string
-): Promise<number> {
-  // Build text representations
-  const seedText = promptText || 
-    `${seedTrack.track_name} ${seedTrack.artist_name} ${seedTrack.genres?.join(" ") || ""}`;
-  const candidateText = 
-    `${candidate.track_name} ${candidate.artist_name} ${candidate.genres?.join(" ") || ""}`;
+): number {
+  // Simple text-based similarity without OpenAI (per spec: "Do NOT use ChatGPT for selecting songs")
+  // Uses word overlap between track metadata
   
-  return await getVibeSimilarity(seedText, candidateText);
+  const seedWords = new Set(
+    `${seedTrack.track_name} ${seedTrack.artist_name} ${seedTrack.genres?.join(" ") || ""} ${promptText || ""}`
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(w => w.length > 2)
+  );
+  
+  const candidateWords = new Set(
+    `${candidate.track_name} ${candidate.artist_name} ${candidate.genres?.join(" ") || ""}`
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(w => w.length > 2)
+  );
+  
+  // Calculate Jaccard similarity
+  const intersection = [...seedWords].filter(w => candidateWords.has(w)).length;
+  const union = new Set([...seedWords, ...candidateWords]).size;
+  
+  if (union === 0) return 0.5;
+  
+  // Scale to 0-1 range with some baseline
+  return 0.3 + (intersection / union) * 0.7;
 }
 
 // Genre compatibility check - returns true if genres are compatible
@@ -623,7 +640,7 @@ async function scoreCandidate(
   const config = MODE_CONFIG[mode];
   
   const audioSim = computeAudioSimilarity(seed, candidate);
-  const textSim = await computeTextSimilarity(seed, candidate, promptText);
+  const textSim = computeTextSimilarity(seed, candidate, promptText);
   const sceneSim = computeSceneSimilarity(seed, candidate);
   const userSim = computeUserVectorSimilarity(candidate, userVector);
 
