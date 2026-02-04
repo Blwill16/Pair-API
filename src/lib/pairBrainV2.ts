@@ -350,17 +350,20 @@ function computeTextSimilarity(
 
 // Genre compatibility check - returns true if genres are compatible
 function areGenresCompatible(seedGenres: string[] | undefined, candidateGenres: string[] | undefined): boolean {
-  if (!seedGenres || seedGenres.length === 0) return true; // No seed genres = allow all
-  if (!candidateGenres || candidateGenres.length === 0) return true; // No candidate genres = allow
+  // If seed has no genres, we can't filter - allow all
+  if (!seedGenres || seedGenres.length === 0) return true;
+  
+  // STRICT: If candidate has no genres, REJECT it (don't allow unknown tracks)
+  if (!candidateGenres || candidateGenres.length === 0) return false;
   
   const seedGenresLower = seedGenres.map(g => g.toLowerCase());
   const candidateGenresLower = candidateGenres.map(g => g.toLowerCase());
   
   // Define genre families - tracks must share at least one family
   const genreFamilies: Record<string, string[]> = {
-    electronic: ['electronic', 'edm', 'dance', 'house', 'techno', 'trance', 'dubstep', 'drum and bass', 'electro', 'future bass', 'progressive house', 'big room', 'tropical house', 'deep house', 'tech house', 'electronica', 'synth'],
+    electronic: ['electronic', 'edm', 'dance', 'house', 'techno', 'trance', 'dubstep', 'drum and bass', 'electro', 'future bass', 'progressive house', 'big room', 'tropical house', 'deep house', 'tech house', 'electronica', 'synth', 'ambient'],
     hiphop: ['hip-hop', 'hip hop', 'rap', 'trap', 'r&b', 'rnb', 'urban', 'drill', 'grime'],
-    rock: ['rock', 'alternative', 'indie', 'punk', 'metal', 'grunge', 'hard rock', 'classic rock', 'progressive rock'],
+    rock: ['rock', 'alternative', 'indie rock', 'punk', 'metal', 'grunge', 'hard rock', 'classic rock', 'progressive rock', 'british invasion'],
     pop: ['pop', 'dance pop', 'synth pop', 'electropop', 'indie pop', 'art pop', 'k-pop', 'j-pop'],
     country: ['country', 'americana', 'folk', 'bluegrass', 'country rock'],
     jazz: ['jazz', 'blues', 'soul', 'funk', 'neo-soul'],
@@ -389,8 +392,15 @@ function areGenresCompatible(seedGenres: string[] | undefined, candidateGenres: 
     }
   }
   
-  // If we couldn't categorize either, allow the match
-  if (seedFamilies.size === 0 || candidateFamilies.size === 0) return true;
+  // STRICT: If we can categorize the seed but NOT the candidate, REJECT
+  // This prevents random uncategorized tracks from slipping through
+  if (seedFamilies.size > 0 && candidateFamilies.size === 0) {
+    console.log(`Genre filter REJECT: candidate genres [${candidateGenresLower.join(', ')}] don't match any family`);
+    return false;
+  }
+  
+  // If we couldn't categorize the seed, allow the match (rare case)
+  if (seedFamilies.size === 0) return true;
   
   // Check for family overlap
   for (const family of seedFamilies) {
@@ -403,6 +413,7 @@ function areGenresCompatible(seedGenres: string[] | undefined, candidateGenres: 
     return true;
   }
   
+  console.log(`Genre filter REJECT: seed families [${Array.from(seedFamilies).join(', ')}] vs candidate families [${Array.from(candidateFamilies).join(', ')}]`);
   return false;
 }
 
