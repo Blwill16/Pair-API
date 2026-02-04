@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
+import { getSupabase } from "@/lib/supabase";
 
 export async function POST(request: NextRequest) {
   try {
@@ -22,8 +22,11 @@ export async function POST(request: NextRequest) {
     const fileExt = file.name.split(".").pop() || "jpg";
     const fileName = `${userId}/${Date.now()}.${fileExt}`;
 
+    // Get full Supabase client for storage access
+    const supabaseClient = getSupabase();
+
     // Upload to Supabase Storage
-    const { data: uploadData, error: uploadError } = await supabase.storage
+    const { error: uploadError } = await supabaseClient.storage
       .from("avatars")
       .upload(fileName, buffer, {
         contentType: file.type,
@@ -39,14 +42,14 @@ export async function POST(request: NextRequest) {
     }
 
     // Get public URL
-    const { data: urlData } = supabase.storage
+    const { data: urlData } = supabaseClient.storage
       .from("avatars")
       .getPublicUrl(fileName);
 
     const avatarUrl = urlData.publicUrl;
 
     // Update profile with new avatar URL
-    const { error: profileError } = await supabase
+    const { error: profileError } = await supabaseClient
       .from("profiles")
       .update({ avatar_url: avatarUrl })
       .eq("user_id", userId);

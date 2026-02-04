@@ -1,14 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
-
-const supabaseUrl = process.env.SUPABASE_URL || "";
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
-
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
+import { getSupabase } from "@/lib/supabase";
 
 // GET /api/searches - Get trending searches and user's recent pairings
 export async function GET(request: NextRequest) {
   try {
+    const supabase = getSupabase();
     const { searchParams } = new URL(request.url);
     const userId = searchParams.get("user_id");
     const type = searchParams.get("type") || "trending";
@@ -75,6 +71,7 @@ export async function GET(request: NextRequest) {
 // POST /api/searches - Log a search query
 export async function POST(request: NextRequest) {
   try {
+    const supabase = getSupabase();
     const body = await request.json();
     const { search_query, user_id } = body;
 

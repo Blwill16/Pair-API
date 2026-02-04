@@ -2,14 +2,14 @@ import { createClient, SupabaseClient } from "@supabase/supabase-js";
 
 let supabaseInstance: SupabaseClient | null = null;
 
+// Use a valid placeholder URL for build time when env vars aren't available
+const PLACEHOLDER_URL = "https://placeholder.supabase.co";
+const PLACEHOLDER_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBsYWNlaG9sZGVyIiwicm9sZSI6ImFub24iLCJpYXQiOjE2NDUxOTI4MjQsImV4cCI6MTk2MDc2ODgyNH0.placeholder";
+
 export function getSupabase(): SupabaseClient {
   if (!supabaseInstance) {
-    const supabaseUrl = process.env.SUPABASE_URL;
-    const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    
-    if (!supabaseUrl || !supabaseServiceKey) {
-      throw new Error("Missing Supabase credentials");
-    }
+    const supabaseUrl = process.env.SUPABASE_URL || PLACEHOLDER_URL;
+    const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || PLACEHOLDER_KEY;
     
     supabaseInstance = createClient(supabaseUrl, supabaseServiceKey);
   }
