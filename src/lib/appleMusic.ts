@@ -462,8 +462,8 @@ export async function searchAppleMusicTracks(query: string, limit: number = 20):
   // Get developer token (generated dynamically from private key)
   const developerToken = await getAppleMusicDeveloperToken();
   if (!developerToken) {
-    console.warn("Apple Music API token not available, using mock data");
-    return mockAppleMusicTracks.slice(0, limit);
+    console.error("Apple Music API token not available - check APPLE_MUSIC_PRIVATE_KEY, APPLE_MUSIC_TEAM_ID, APPLE_MUSIC_KEY_ID env vars");
+    return [];
   }
 
   try {
@@ -499,7 +499,7 @@ export async function searchAppleMusicTracks(query: string, limit: number = 20):
     }));
   } catch (error) {
     console.error("Apple Music search error:", error);
-    return mockAppleMusicTracks.slice(0, limit);
+    return []; // Return empty array instead of mock data
   }
 }
 
