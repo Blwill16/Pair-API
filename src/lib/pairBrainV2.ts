@@ -617,13 +617,21 @@ async function generateCandidates(
     }
     console.log(`After track name search: ${candidates.length} candidates`);
 
-    // STRATEGY 6: Fill with broader genre search
-    if (candidates.length < 200 && seedTrack.genres && seedTrack.genres.length > 0) {
-      const primaryGenre = seedTrack.genres[0];
-      const fillTracks = await searchAppleMusicTracks(`${primaryGenre} music`, APPLE_MUSIC_LIMIT);
-      for (const track of fillTracks) {
-        if (candidates.length >= 400) break;
-        addCandidate(track);
+    // STRATEGY 6: Fill with broader genre search (but still genre-compatible)
+    if (candidates.length < 100 && seedTrack.genres && seedTrack.genres.length > 0) {
+      // Use more specific genre searches instead of just "Music"
+      const genreSearches = [
+        seedTrack.genres[0], // Primary genre
+        `${seedTrack.genres[0]} hits`,
+        `best ${seedTrack.genres[0]}`,
+        `top ${seedTrack.genres[0]} songs`,
+      ];
+      for (const genreQuery of genreSearches) {
+        const fillTracks = await searchAppleMusicTracks(genreQuery, APPLE_MUSIC_LIMIT);
+        for (const track of fillTracks) {
+          if (candidates.length >= 200) break;
+          addCandidate(track); // Genre filter still applies here
+        }
       }
     }
 
