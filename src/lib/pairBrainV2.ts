@@ -490,6 +490,22 @@ function computeUserVectorSimilarity(track: PairTrack, userVector: UserTasteVect
 // CANDIDATE GENERATION (200-500 candidates)
 // ============================================================================
 
+// Helper to sanitize search queries for Apple Music API
+function sanitizeSearchQuery(query: string): string {
+  // Extract primary artist (before "&", "feat.", "ft.", ",", "x ", "X ")
+  let sanitized = query
+    .split(/\s*[&,]\s*/)[0]  // Split on & or comma, take first part
+    .split(/\s*feat\.?\s*/i)[0]  // Split on "feat" or "feat.", take first part
+    .split(/\s*ft\.?\s*/i)[0]  // Split on "ft" or "ft.", take first part
+    .split(/\s+[xX]\s+/)[0]  // Split on " x " or " X ", take first part
+    .trim();
+  
+  // Remove special characters that might cause API issues
+  sanitized = sanitized.replace(/[^\w\s'-]/g, ' ').replace(/\s+/g, ' ').trim();
+  
+  return sanitized || query; // Fallback to original if sanitization empties it
+}
+
 async function generateCandidates(
   seedTrack: PairTrack,
   exclusions: ExclusionSets,
@@ -519,11 +535,13 @@ async function generateCandidates(
     return true;
   };
 
-  console.log(`Generating candidates for: ${seedTrack.track_name} by ${seedTrack.artist_name} (mode: ${mode})`);
+  // Sanitize artist name for search queries
+  const sanitizedArtist = sanitizeSearchQuery(seedTrack.artist_name);
+  console.log(`Generating candidates for: ${seedTrack.track_name} by ${seedTrack.artist_name} (sanitized: ${sanitizedArtist}) (mode: ${mode})`);
 
   try {
     // STRATEGY 1: Same artist deep cuts (30% of candidates)
-    const artistTracks = await searchAppleMusicTracks(seedTrack.artist_name, 50);
+    const artistTracks = await searchAppleMusicTracks(sanitizedArtist, 50);
     for (const track of artistTracks) {
       if (candidates.length >= 60) break;
       addCandidate(track);
@@ -532,8 +550,8 @@ async function generateCandidates(
 
     // STRATEGY 2: Related artists (1-hop) - search for similar artists
     const relatedQueries = [
-      `${seedTrack.artist_name} similar`,
-      `artists like ${seedTrack.artist_name}`,
+      `${sanitizedArtist} similar`,
+      `artists like ${sanitizedArtist}`,
     ];
     for (const query of relatedQueries) {
       const relatedTracks = await searchAppleMusicTracks(query, 40);
