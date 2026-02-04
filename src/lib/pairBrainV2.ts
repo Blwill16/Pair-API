@@ -331,19 +331,84 @@ async function computeTextSimilarity(
   return await getVibeSimilarity(seedText, candidateText);
 }
 
+// Genre compatibility check - returns true if genres are compatible
+function areGenresCompatible(seedGenres: string[] | undefined, candidateGenres: string[] | undefined): boolean {
+  if (!seedGenres || seedGenres.length === 0) return true; // No seed genres = allow all
+  if (!candidateGenres || candidateGenres.length === 0) return true; // No candidate genres = allow
+  
+  const seedGenresLower = seedGenres.map(g => g.toLowerCase());
+  const candidateGenresLower = candidateGenres.map(g => g.toLowerCase());
+  
+  // Define genre families - tracks must share at least one family
+  const genreFamilies: Record<string, string[]> = {
+    electronic: ['electronic', 'edm', 'dance', 'house', 'techno', 'trance', 'dubstep', 'drum and bass', 'electro', 'future bass', 'progressive house', 'big room', 'tropical house', 'deep house', 'tech house', 'electronica', 'synth'],
+    hiphop: ['hip-hop', 'hip hop', 'rap', 'trap', 'r&b', 'rnb', 'urban', 'drill', 'grime'],
+    rock: ['rock', 'alternative', 'indie', 'punk', 'metal', 'grunge', 'hard rock', 'classic rock', 'progressive rock'],
+    pop: ['pop', 'dance pop', 'synth pop', 'electropop', 'indie pop', 'art pop', 'k-pop', 'j-pop'],
+    country: ['country', 'americana', 'folk', 'bluegrass', 'country rock'],
+    jazz: ['jazz', 'blues', 'soul', 'funk', 'neo-soul'],
+    classical: ['classical', 'orchestral', 'opera', 'symphony', 'chamber'],
+    latin: ['latin', 'reggaeton', 'salsa', 'bachata', 'cumbia', 'latin pop'],
+    world: ['world', 'afrobeat', 'reggae', 'dancehall', 'caribbean']
+  };
+  
+  // Find which families the seed belongs to
+  const seedFamilies = new Set<string>();
+  for (const [family, keywords] of Object.entries(genreFamilies)) {
+    for (const genre of seedGenresLower) {
+      if (keywords.some(kw => genre.includes(kw))) {
+        seedFamilies.add(family);
+      }
+    }
+  }
+  
+  // Find which families the candidate belongs to
+  const candidateFamilies = new Set<string>();
+  for (const [family, keywords] of Object.entries(genreFamilies)) {
+    for (const genre of candidateGenresLower) {
+      if (keywords.some(kw => genre.includes(kw))) {
+        candidateFamilies.add(family);
+      }
+    }
+  }
+  
+  // If we couldn't categorize either, allow the match
+  if (seedFamilies.size === 0 || candidateFamilies.size === 0) return true;
+  
+  // Check for family overlap
+  for (const family of seedFamilies) {
+    if (candidateFamilies.has(family)) return true;
+  }
+  
+  // Also allow pop to match with electronic (common crossover)
+  if ((seedFamilies.has('pop') && candidateFamilies.has('electronic')) ||
+      (seedFamilies.has('electronic') && candidateFamilies.has('pop'))) {
+    return true;
+  }
+  
+  return false;
+}
+
 function computeSceneSimilarity(seed: PairTrack, candidate: PairTrack): number {
   let score = 0;
   let factors = 0;
 
-  // Genre overlap
+  // Genre overlap - now weighted more heavily
   if (seed.genres && candidate.genres) {
     const seedGenres = new Set(seed.genres.map(g => g.toLowerCase()));
     const candidateGenres = new Set(candidate.genres.map(g => g.toLowerCase()));
     const overlap = [...seedGenres].filter(g => candidateGenres.has(g)).length;
     const total = new Set([...seedGenres, ...candidateGenres]).size;
     if (total > 0) {
-      score += (overlap / total) * 0.4;
-      factors += 0.4;
+      // Exact genre match is very important
+      const genreScore = overlap / total;
+      score += genreScore * 0.5; // Increased from 0.4
+      factors += 0.5;
+      
+      // Bonus for genre family match
+      if (areGenresCompatible(seed.genres, candidate.genres)) {
+        score += 0.1;
+      }
     }
   }
 
@@ -355,8 +420,8 @@ function computeSceneSimilarity(seed: PairTrack, candidate: PairTrack): number {
       const yearDiff = Math.abs(seedYear - candidateYear);
       // Within 5 years = high similarity, decreases after
       const eraSimilarity = Math.max(0, 1 - (yearDiff / 20));
-      score += eraSimilarity * 0.3;
-      factors += 0.3;
+      score += eraSimilarity * 0.25;
+      factors += 0.25;
     }
   }
 
@@ -365,13 +430,13 @@ function computeSceneSimilarity(seed: PairTrack, candidate: PairTrack): number {
   const candidateArtistWords = candidate.artist_name.toLowerCase().split(/\s+/);
   const artistOverlap = seedArtistWords.filter(w => candidateArtistWords.includes(w)).length;
   if (artistOverlap > 0) {
-    score += 0.2;
-    factors += 0.3;
+    score += 0.15;
+    factors += 0.25;
   } else {
-    factors += 0.3;
+    factors += 0.25;
   }
 
-  return factors > 0 ? score / factors : 0.5;
+  return factors > 0 ? score / factors : 0.3; // Lower default for unknown
 }
 
 function computeUserVectorSimilarity(track: PairTrack, userVector: UserTasteVector | null): number {
@@ -419,9 +484,17 @@ async function generateCandidates(
   // Add seed to exclusions
   seenIds.add(seedTrack.apple_music_id);
   
-  const addCandidate = (track: PairTrack): boolean => {
+  const addCandidate = (track: PairTrack, requireGenreMatch: boolean = true): boolean => {
     if (seenIds.has(track.apple_music_id)) return false;
     if (shouldExclude(track.apple_music_id, exclusions)) return false;
+    
+    // HARD FILTER: Reject tracks from incompatible genres (unless adventure mode)
+    if (requireGenreMatch && mode !== "adventure") {
+      if (!areGenresCompatible(seedTrack.genres, track.genres)) {
+        return false;
+      }
+    }
+    
     candidates.push(track);
     seenIds.add(track.apple_music_id);
     return true;
@@ -598,9 +671,12 @@ function selectCoreTrack(
     return candidate;
   }
   
-  // Fallback: relax threshold if no candidates meet it
+  // Fallback: relax threshold but still require minimum score of 0.4
+  // This prevents completely unrelated tracks from being selected
+  const minimumScore = 0.4;
   for (const candidate of candidates) {
     if (selectedIds.has(candidate.track.apple_music_id)) continue;
+    if (candidate.total_score < minimumScore) continue; // Hard minimum
     
     const artist = candidate.track.artist_name.toLowerCase();
     if (selectedArtists.has(artist)) continue;
