@@ -561,6 +561,146 @@ export function getMockCandidates(excludeIds: string[] = []): PairTrack[] {
   return mockAppleMusicTracks.filter((t) => !excludeIds.includes(t.apple_music_id));
 }
 
+// Search for playlists containing an artist and extract tracks (playlist co-occurrence)
+// This is the KEY signal for finding similar tracks - songs curated together are likely similar
+async function getPlaylistCooccurrenceTracks(artistName: string, seedTrackName: string): Promise<PairTrack[]> {
+  const developerToken = await getAppleMusicDeveloperToken();
+  if (!developerToken) return [];
+
+  const tracks: PairTrack[] = [];
+  const seenIds = new Set<string>();
+
+  try {
+    // Search for playlists featuring this artist
+    const playlistQueries = [
+      `${artistName} playlist`,
+      `${artistName} mix`,
+      `${artistName} essentials`,
+      `similar to ${artistName}`,
+    ];
+
+    for (const query of playlistQueries) {
+      if (tracks.length >= 50) break;
+      
+      const response = await fetch(
+        `https://api.music.apple.com/v1/catalog/us/search?term=${encodeURIComponent(query)}&types=playlists&limit=5`,
+        { headers: { Authorization: `Bearer ${developerToken}` } }
+      );
+      
+      if (!response.ok) continue;
+      const data = await response.json();
+      const playlists = data.results?.playlists?.data || [];
+      
+      // Get tracks from each playlist
+      for (const playlist of playlists) {
+        if (tracks.length >= 50) break;
+        
+        try {
+          const tracksResponse = await fetch(
+            `https://api.music.apple.com/v1/catalog/us/playlists/${playlist.id}/tracks?limit=25`,
+            { headers: { Authorization: `Bearer ${developerToken}` } }
+          );
+          
+          if (!tracksResponse.ok) continue;
+          const tracksData = await tracksResponse.json();
+          
+          for (const song of tracksData.data || []) {
+            if (seenIds.has(song.id)) continue;
+            // Skip the seed track itself
+            if (song.attributes.name.toLowerCase() === seedTrackName.toLowerCase()) continue;
+            
+            seenIds.add(song.id);
+            tracks.push({
+              apple_music_id: song.id,
+              track_name: song.attributes.name,
+              artist_name: song.attributes.artistName,
+              album_name: song.attributes.albumName,
+              album_art_url: song.attributes.artwork?.url?.replace("{w}", "600").replace("{h}", "600"),
+              preview_url: song.attributes.previews?.[0]?.url,
+              duration_ms: song.attributes.durationInMillis,
+              release_date: song.attributes.releaseDate,
+              genres: song.attributes.genreNames,
+              // Mark as playlist co-occurrence for scoring boost
+              _source: 'playlist_cooccurrence',
+            } as PairTrack);
+          }
+        } catch {
+          continue;
+        }
+      }
+    }
+    
+    console.log(`Found ${tracks.length} tracks from playlist co-occurrence for ${artistName}`);
+    return tracks;
+  } catch (error) {
+    console.error("Error getting playlist co-occurrence tracks:", error);
+    return [];
+  }
+}
+
+// Get similar artists by searching for "artists like X" or known similar artists
+async function getSimilarArtistTracks(artistName: string, genres: string[] = []): Promise<PairTrack[]> {
+  const developerToken = await getAppleMusicDeveloperToken();
+  if (!developerToken) return [];
+
+  const tracks: PairTrack[] = [];
+  const seenIds = new Set<string>();
+
+  try {
+    // Search queries to find similar artists
+    const queries = [
+      `artists like ${artistName}`,
+      `similar to ${artistName}`,
+      `${artistName} style`,
+    ];
+    
+    // Add genre-specific queries if we have genres
+    if (genres.length > 0) {
+      const primaryGenre = genres[0];
+      queries.push(`best ${primaryGenre} artists`);
+      queries.push(`${primaryGenre} producers`);
+    }
+
+    for (const query of queries) {
+      if (tracks.length >= 30) break;
+      
+      const response = await fetch(
+        `https://api.music.apple.com/v1/catalog/us/search?term=${encodeURIComponent(query)}&types=songs&limit=15`,
+        { headers: { Authorization: `Bearer ${developerToken}` } }
+      );
+      
+      if (!response.ok) continue;
+      const data = await response.json();
+      const songs = data.results?.songs?.data || [];
+      
+      for (const song of songs) {
+        if (seenIds.has(song.id)) continue;
+        // Skip tracks from the same artist (we get those separately)
+        if (song.attributes.artistName.toLowerCase() === artistName.toLowerCase()) continue;
+        
+        seenIds.add(song.id);
+        tracks.push({
+          apple_music_id: song.id,
+          track_name: song.attributes.name,
+          artist_name: song.attributes.artistName,
+          album_name: song.attributes.albumName,
+          album_art_url: song.attributes.artwork?.url?.replace("{w}", "600").replace("{h}", "600"),
+          preview_url: song.attributes.previews?.[0]?.url,
+          duration_ms: song.attributes.durationInMillis,
+          release_date: song.attributes.releaseDate,
+          genres: song.attributes.genreNames,
+        });
+      }
+    }
+    
+    console.log(`Found ${tracks.length} tracks from similar artist search for ${artistName}`);
+    return tracks;
+  } catch (error) {
+    console.error("Error getting similar artist tracks:", error);
+    return [];
+  }
+}
+
 // Get artist info from Apple Music (for related artists)
 async function getAppleMusicArtist(artistName: string): Promise<{ id: string; name: string } | null> {
   const developerToken = await getAppleMusicDeveloperToken();
@@ -677,7 +817,6 @@ export async function getAppleMusicRelatedTracks(
   const developerToken = await getAppleMusicDeveloperToken();
   if (!developerToken) {
     console.error("No Apple Music developer token available - check APPLE_MUSIC_PRIVATE_KEY, APPLE_MUSIC_TEAM_ID, APPLE_MUSIC_KEY_ID env vars");
-    // Return empty array instead of mock data - let caller handle this
     return [];
   }
 
@@ -698,83 +837,92 @@ export async function getAppleMusicRelatedTracks(
   };
 
   try {
-    console.log(`Generating candidates for: ${seedTrack.track_name} by ${seedTrack.artist_name}`);
+    console.log(`\n========================================`);
+    console.log(`2-STAGE PIPELINE: Generating candidates for: ${seedTrack.track_name} by ${seedTrack.artist_name}`);
+    console.log(`========================================\n`);
     
-    // STRATEGY 1: Same artist's other tracks (deep cuts, not just top hits)
-    // This gives us tracks with similar production style
+    // ============================================================================
+    // STAGE 1: CANDIDATE GENERATION FROM APPLE'S GRAPH
+    // Priority order: Playlist co-occurrence > Same artist > Similar artists
+    // ============================================================================
+    
+    // STRATEGY 1 (HIGHEST PRIORITY): Playlist co-occurrence
+    // Songs that appear alongside the seed in curated playlists are the BEST signal
+    console.log(`STRATEGY 1: Playlist co-occurrence (highest priority)...`);
+    const playlistTracks = await getPlaylistCooccurrenceTracks(seedTrack.artist_name, seedTrack.track_name);
+    for (const track of playlistTracks) {
+      addCandidate(track);
+    }
+    console.log(`  Added ${candidates.length} tracks from playlist co-occurrence`);
+
+    // STRATEGY 2: Same artist's other tracks
+    // Tracks from the same artist have similar production style
+    console.log(`STRATEGY 2: Same artist tracks...`);
     const seedArtist = await getAppleMusicArtist(seedTrack.artist_name);
     if (seedArtist) {
-      const deepCuts = await getArtistDeepCuts(seedArtist.id, 15);
+      const deepCuts = await getArtistDeepCuts(seedArtist.id, 20);
+      let sameArtistCount = 0;
       for (const track of deepCuts) {
-        if (candidates.length >= limit * 0.3) break; // Max 30% from same artist
+        if (sameArtistCount >= 8) break; // Max 8 from same artist
+        if (addCandidate(track)) sameArtistCount++;
+      }
+      console.log(`  Added ${sameArtistCount} tracks from same artist, total: ${candidates.length}`);
+    }
+
+    // STRATEGY 3: Similar artists from search
+    // Find tracks from artists similar to the seed artist
+    console.log(`STRATEGY 3: Similar artist tracks...`);
+    const similarTracks = await getSimilarArtistTracks(seedTrack.artist_name, seedTrack.genres);
+    for (const track of similarTracks) {
+      if (!seenArtists.has(track.artist_name.toLowerCase())) {
         addCandidate(track);
       }
-      console.log(`Added ${candidates.length} tracks from same artist`);
     }
+    console.log(`  Added similar artist tracks, total: ${candidates.length}`);
 
-    // STRATEGY 2: Related/collaborating artists
-    // Artists who have worked together or are in similar space
-    if (seedArtist) {
+    // STRATEGY 4: Related/collaborating artists from albums
+    if (seedArtist && candidates.length < 50) {
+      console.log(`STRATEGY 4: Collaborating artists...`);
       const relatedArtists = await getRelatedArtists(seedArtist.id);
       for (const artistName of relatedArtists) {
-        if (candidates.length >= limit * 0.6) break;
-        const artistTracks = await searchAppleMusicTracks(artistName, 8);
+        if (candidates.length >= 60) break;
+        const artistTracks = await searchAppleMusicTracks(artistName, 10);
         for (const track of artistTracks) {
-          if (candidates.length >= limit * 0.6) break;
-          addCandidate(track);
-        }
-      }
-      console.log(`Added tracks from related artists, total: ${candidates.length}`);
-    }
-
-    // STRATEGY 3: Genre + era matching
-    // Find tracks from same genre and similar release period
-    if (seedTrack.genres && seedTrack.genres.length > 0) {
-      const releaseYear = seedTrack.release_date?.substring(0, 4);
-      for (const genre of seedTrack.genres.slice(0, 2)) {
-        if (candidates.length >= limit * 0.8) break;
-        
-        // Search with genre + year for era-appropriate results
-        const genreTracks = await searchByGenreAndEra(genre, releaseYear, 12);
-        for (const track of genreTracks) {
-          if (candidates.length >= limit * 0.8) break;
-          // Prefer tracks from different artists for diversity
+          if (candidates.length >= 60) break;
           if (!seenArtists.has(track.artist_name.toLowerCase())) {
             addCandidate(track);
           }
         }
       }
-      console.log(`Added genre-matched tracks, total: ${candidates.length}`);
+      console.log(`  Added collaborating artist tracks, total: ${candidates.length}`);
     }
 
-    // STRATEGY 4: Subgenre exploration
-    // Search for more specific genre combinations
-    if (seedTrack.genres && seedTrack.genres.length >= 2 && candidates.length < limit) {
-      const subgenreQuery = seedTrack.genres.slice(0, 2).join(" ");
-      const subgenreTracks = await searchAppleMusicTracks(subgenreQuery, 10);
-      for (const track of subgenreTracks) {
-        if (candidates.length >= limit) break;
-        if (!seenArtists.has(track.artist_name.toLowerCase())) {
-          addCandidate(track);
+    // STRATEGY 5: Genre-specific search (only if we need more candidates)
+    if (candidates.length < 40 && seedTrack.genres && seedTrack.genres.length > 0) {
+      console.log(`STRATEGY 5: Genre-specific search...`);
+      // Use specific genre terms, not generic "music"
+      const genreQueries = seedTrack.genres.slice(0, 3).map(g => 
+        g.toLowerCase().replace('music', '').trim()
+      ).filter(g => g.length > 2);
+      
+      for (const genre of genreQueries) {
+        if (candidates.length >= 60) break;
+        const genreTracks = await searchAppleMusicTracks(`${genre} songs`, 15);
+        for (const track of genreTracks) {
+          if (candidates.length >= 60) break;
+          if (!seenArtists.has(track.artist_name.toLowerCase())) {
+            addCandidate(track);
+          }
         }
       }
+      console.log(`  Added genre tracks, total: ${candidates.length}`);
     }
 
-    // STRATEGY 5: Fill remaining with broader genre search
-    if (candidates.length < limit && seedTrack.genres && seedTrack.genres.length > 0) {
-      const primaryGenre = seedTrack.genres[0];
-      const fillTracks = await searchAppleMusicTracks(`${primaryGenre} music`, limit - candidates.length + 5);
-      for (const track of fillTracks) {
-        if (candidates.length >= limit) break;
-        addCandidate(track);
-      }
-    }
-
-    console.log(`Final candidate count: ${candidates.length}`);
+    console.log(`\nFinal candidate count: ${candidates.length}`);
+    console.log(`========================================\n`);
     return candidates.slice(0, limit);
   } catch (error) {
     console.error("Error getting related tracks:", error);
-    // Return whatever candidates we have instead of mock data
     console.log(`Returning ${candidates.length} candidates after error`);
     return candidates.slice(0, limit);
   }
