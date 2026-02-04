@@ -518,9 +518,17 @@ async function generateCandidates(
   seenIds.add(seedTrack.apple_music_id);
   
   let genreFilteredCount = 0;
+  let seenCount = 0;
+  let excludedCount = 0;
   const addCandidate = (track: PairTrack, requireGenreMatch: boolean = true): boolean => {
-    if (seenIds.has(track.apple_music_id)) return false;
-    if (shouldExclude(track.apple_music_id, exclusions)) return false;
+    if (seenIds.has(track.apple_music_id)) {
+      seenCount++;
+      return false;
+    }
+    if (shouldExclude(track.apple_music_id, exclusions)) {
+      excludedCount++;
+      return false;
+    }
     
     // HARD FILTER: Reject tracks from incompatible genres (unless adventure mode)
     if (requireGenreMatch && mode !== "adventure") {
@@ -534,6 +542,8 @@ async function generateCandidates(
     seenIds.add(track.apple_music_id);
     return true;
   };
+  
+  console.log(`Seed track genres: ${JSON.stringify(seedTrack.genres)}`);
 
   // Sanitize artist name for search queries
   const sanitizedArtist = sanitizeSearchQuery(seedTrack.artist_name);
@@ -542,11 +552,15 @@ async function generateCandidates(
   try {
     // STRATEGY 1: Same artist deep cuts (30% of candidates)
     const artistTracks = await searchAppleMusicTracks(sanitizedArtist, 50);
+    console.log(`Search returned ${artistTracks.length} tracks for artist "${sanitizedArtist}"`);
+    if (artistTracks.length > 0) {
+      console.log(`First track genres: ${JSON.stringify(artistTracks[0].genres)}`);
+    }
     for (const track of artistTracks) {
       if (candidates.length >= 60) break;
       addCandidate(track);
     }
-    console.log(`After same artist: ${candidates.length} candidates`);
+    console.log(`After same artist: ${candidates.length} candidates (filtered: seen=${seenCount}, excluded=${excludedCount}, genre=${genreFilteredCount})`);
 
     // STRATEGY 2: Related artists (1-hop) - search for similar artists
     const relatedQueries = [
