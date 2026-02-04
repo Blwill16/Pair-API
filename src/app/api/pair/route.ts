@@ -285,13 +285,25 @@ export async function POST(request: NextRequest) {
           excluded_count: pairingResult.excluded_count
         });
       } catch (pairBrainError) {
-        console.error("Pair Brain v2 error:", pairBrainError);
-        console.error("Error details:", JSON.stringify(pairBrainError, Object.getOwnPropertyNames(pairBrainError)));
+        const errorMessage = pairBrainError instanceof Error ? pairBrainError.message : String(pairBrainError);
+        const errorStack = pairBrainError instanceof Error ? pairBrainError.stack : "";
+        console.error("Pair Brain v2 error:", errorMessage);
+        console.error("Error stack:", errorStack);
+        
+        // Return error details in response for debugging (remove in production)
         // Fall back to legacy Apple Music pairing
         console.log("Falling back to legacy Apple Music pairing...");
         const result = await generateAppleMusicPairing(seedTrackId, prompt, mode, userId);
         console.log(`Legacy pairing returned ${result.results?.length || 0} results`);
-        return NextResponse.json(result);
+        
+        // Add debug info to response
+        return NextResponse.json({
+          ...result,
+          _debug: {
+            pairBrainV2Error: errorMessage,
+            fallbackUsed: true
+          }
+        });
       }
     }
 
