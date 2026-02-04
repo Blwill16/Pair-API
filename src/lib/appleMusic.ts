@@ -467,8 +467,11 @@ export async function searchAppleMusicTracks(query: string, limit: number = 20):
   }
 
   try {
+    const searchUrl = `https://api.music.apple.com/v1/catalog/us/search?term=${encodeURIComponent(query)}&types=songs&limit=${limit}`;
+    console.log(`Apple Music search URL: ${searchUrl}`);
+    
     const response = await fetch(
-      `https://api.music.apple.com/v1/catalog/us/search?term=${encodeURIComponent(query)}&types=songs&limit=${limit}`,
+      searchUrl,
       {
         headers: {
           Authorization: `Bearer ${developerToken}`,
@@ -477,7 +480,9 @@ export async function searchAppleMusicTracks(query: string, limit: number = 20):
     );
 
     if (!response.ok) {
-      throw new Error(`Apple Music API error: ${response.status}`);
+      const errorBody = await response.text();
+      console.error(`Apple Music API error response: ${errorBody}`);
+      throw new Error(`Apple Music API error: ${response.status} - ${errorBody}`);
     }
 
     const data = await response.json();

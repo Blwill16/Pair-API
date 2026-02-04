@@ -495,8 +495,8 @@ function sanitizeSearchQuery(query: string): string {
   // Extract primary artist (before "&", "feat.", "ft.", ",", "x ", "X ")
   let sanitized = query
     .split(/\s*[&,]\s*/)[0]  // Split on & or comma, take first part
-    .split(/\s*feat\.?\s*/i)[0]  // Split on "feat" or "feat.", take first part
-    .split(/\s*ft\.?\s*/i)[0]  // Split on "ft" or "ft.", take first part
+    .split(/\s+feat\.?\s+/i)[0]  // Split on " feat " or " feat. ", take first part (with spaces)
+    .split(/\s+ft\.?\s+/i)[0]  // Split on " ft " or " ft. ", take first part (with spaces)
     .split(/\s+[xX]\s+/)[0]  // Split on " x " or " X ", take first part
     .trim();
   
