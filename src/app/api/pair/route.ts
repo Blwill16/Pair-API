@@ -19,6 +19,7 @@ import {
 import { supabase } from "@/lib/supabase";
 import { getAppleMusicTrack, searchAppleMusicTracks, getMockCandidates, getAppleMusicRelatedTracks, PairTrack } from "@/lib/appleMusic";
 import { getVibeSimilarity } from "@/lib/embeddings";
+import { generatePairing, savePairingToHistory, PairingMode as PairBrainMode } from "@/lib/pairBrainV2";
 
 // Helper function to check Apple Music credentials at runtime
 function useAppleMusic(): boolean {
@@ -214,10 +215,54 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Use Apple Music if credentials are configured
+    // Use the new 6-track slotting algorithm (Pair Brain v2)
     if (useAppleMusic()) {
-      const result = await generateAppleMusicPairing(seedTrackId, prompt, mode, userId);
-      return NextResponse.json(result);
+      try {
+        const pairingResult = await generatePairing({
+          seed_track_apple_id: seedTrackId,
+          prompt_text: prompt,
+          mode: mode as PairBrainMode,
+          user_id: userId,
+          session_id: `session_${Date.now()}`
+        });
+
+        // Save to history if user is logged in
+        if (userId) {
+          await savePairingToHistory(pairingResult, userId);
+        }
+
+        // Format response to match existing API contract
+        return NextResponse.json({
+          seed: {
+            track_id: pairingResult.seed_track.apple_music_id,
+            track_name: pairingResult.seed_track.track_name,
+            artist_name: pairingResult.seed_track.artist_name,
+            album_art_url: pairingResult.seed_track.album_art_url,
+            preview_url: pairingResult.seed_track.preview_url,
+            spotify_url: `https://music.apple.com/us/song/${pairingResult.seed_track.apple_music_id}`,
+          },
+          results: pairingResult.tracks.map(t => ({
+            track_id: t.track.apple_music_id,
+            track_name: t.track.track_name,
+            artist_name: t.track.artist_name,
+            album_art_url: t.track.album_art_url,
+            preview_url: t.track.preview_url,
+            spotify_url: `https://music.apple.com/us/song/${t.track.apple_music_id}`,
+            score: t.similarity_score,
+            explanation: t.explanation,
+            slot_type: t.slot_type,
+            slot_position: t.slot_position,
+          })),
+          mode: pairingResult.mode,
+          session_id: pairingResult.session_id,
+          excluded_count: pairingResult.excluded_count
+        });
+      } catch (pairBrainError) {
+        console.error("Pair Brain v2 error, falling back to legacy:", pairBrainError);
+        // Fall back to legacy Apple Music pairing
+        const result = await generateAppleMusicPairing(seedTrackId, prompt, mode, userId);
+        return NextResponse.json(result);
+      }
     }
 
     // Fall back to Spotify mock data
