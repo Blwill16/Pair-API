@@ -18,8 +18,37 @@ import {
 } from "@/lib/pairing";
 import { supabase } from "@/lib/supabase";
 import { getAppleMusicTrack, searchAppleMusicTracks, getMockCandidates, getAppleMusicRelatedTracks, PairTrack } from "@/lib/appleMusic";
-import { getVibeSimilarity } from "@/lib/embeddings";
 import { generatePairing, savePairingToHistory, PairingMode as PairBrainMode } from "@/lib/pairBrainV2";
+
+// Simple text similarity without OpenAI (per spec: "Do NOT use ChatGPT for selecting songs")
+function computeTextSimilarity(
+  seedTrack: PairTrack,
+  candidate: PairTrack,
+  promptText?: string
+): number {
+  const seedWords = new Set(
+    `${seedTrack.track_name} ${seedTrack.artist_name} ${seedTrack.genres?.join(" ") || ""} ${promptText || ""}`
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(w => w.length > 2)
+  );
+  
+  const candidateWords = new Set(
+    `${candidate.track_name} ${candidate.artist_name} ${candidate.genres?.join(" ") || ""}`
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(w => w.length > 2)
+  );
+  
+  // Calculate Jaccard similarity
+  const intersection = [...seedWords].filter(w => candidateWords.has(w)).length;
+  const union = new Set([...seedWords, ...candidateWords]).size;
+  
+  if (union === 0) return 0.5;
+  
+  // Scale to 0-1 range with some baseline
+  return 0.3 + (intersection / union) * 0.7;
+}
 
 // Helper function to check Apple Music credentials at runtime
 function useAppleMusic(): boolean {
@@ -84,10 +113,8 @@ async function generateAppleMusicPairing(
     // Compute sound similarity based on audio features
     const soundSimilarity = computeAppleMusicSoundSimilarity(seedTrack, candidate);
     
-    // Compute vibe similarity using embeddings
-    const seedText = `${seedTrack.track_name} ${seedTrack.artist_name} ${seedTrack.genres?.join(" ") || ""}`;
-    const candidateText = `${candidate.track_name} ${candidate.artist_name} ${candidate.genres?.join(" ") || ""}`;
-    const vibeSimilarity = await getVibeSimilarity(prompt || seedText, candidateText);
+    // Compute vibe similarity using simple text overlap (no OpenAI - per spec)
+    const vibeSimilarity = computeTextSimilarity(seedTrack, candidate, prompt);
 
     // Compute novelty score
     const noveltyScore = mode === "adventure" 

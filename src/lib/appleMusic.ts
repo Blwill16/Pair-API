@@ -665,12 +665,15 @@ export async function getAppleMusicRelatedTracks(
   limit: number = 25
 ): Promise<PairTrack[]> {
   if (MOCK_APPLE_MUSIC) {
+    console.log("MOCK_APPLE_MUSIC is enabled, returning mock data");
     return mockAppleMusicTracks.filter((t) => !excludeIds.includes(t.apple_music_id)).slice(0, limit);
   }
 
   const developerToken = await getAppleMusicDeveloperToken();
   if (!developerToken) {
-    return mockAppleMusicTracks.filter((t) => !excludeIds.includes(t.apple_music_id)).slice(0, limit);
+    console.error("No Apple Music developer token available - check APPLE_MUSIC_PRIVATE_KEY, APPLE_MUSIC_TEAM_ID, APPLE_MUSIC_KEY_ID env vars");
+    // Return empty array instead of mock data - let caller handle this
+    return [];
   }
 
   const candidates: PairTrack[] = [];
@@ -766,7 +769,9 @@ export async function getAppleMusicRelatedTracks(
     return candidates.slice(0, limit);
   } catch (error) {
     console.error("Error getting related tracks:", error);
-    return mockAppleMusicTracks.filter((t) => !excludeIds.includes(t.apple_music_id)).slice(0, limit);
+    // Return whatever candidates we have instead of mock data
+    console.log(`Returning ${candidates.length} candidates after error`);
+    return candidates.slice(0, limit);
   }
 }
 
