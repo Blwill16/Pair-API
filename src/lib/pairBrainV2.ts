@@ -754,12 +754,14 @@ function selectFlavorTrack(
   selectedArtists: Set<string>,
   selectedIds: Set<string>,
   selectedGenres: Set<string>,
-  threshold: number
+  threshold: number,
+  seedGenres?: string[]
 ): ScoredCandidate | null {
   // Find best candidate that increases variety:
   // 1. Different artist
-  // 2. Preferably different genre/era
-  // 3. Still meets flavor threshold
+  // 2. Still within same genre family (important!)
+  // 3. Preferably different sub-genre/era
+  // 4. Still meets flavor threshold
   
   let bestCandidate: ScoredCandidate | null = null;
   let bestVarietyScore = -1;
@@ -771,10 +773,15 @@ function selectFlavorTrack(
     const artist = candidate.track.artist_name.toLowerCase();
     if (selectedArtists.has(artist)) continue;
     
+    // IMPORTANT: Ensure genre compatibility with seed
+    if (seedGenres && !areGenresCompatible(seedGenres, candidate.track.genres)) {
+      continue;
+    }
+    
     // Calculate variety score
     let varietyScore = candidate.total_score;
     
-    // Bonus for different genres
+    // Bonus for different sub-genres (within the same family)
     const candidateGenres = candidate.track.genres || [];
     const newGenres = candidateGenres.filter(g => !selectedGenres.has(g.toLowerCase()));
     varietyScore += newGenres.length * 0.05;
@@ -795,7 +802,8 @@ function selectWildcard(
   candidates: ScoredCandidate[],
   selectedArtists: Set<string>,
   selectedIds: Set<string>,
-  mode: PairingMode
+  mode: PairingMode,
+  seedGenres?: string[]
 ): ScoredCandidate | null {
   const config = MODE_CONFIG[mode];
   
@@ -806,6 +814,11 @@ function selectWildcard(
       
       const artist = candidate.track.artist_name.toLowerCase();
       if (selectedArtists.has(artist)) continue;
+      
+      // IMPORTANT: Ensure genre compatibility even for wildcard
+      if (seedGenres && !areGenresCompatible(seedGenres, candidate.track.genres)) {
+        continue;
+      }
       
       // Check if in the similarity band
       if (candidate.total_score >= config.wildcard_min && 
@@ -826,6 +839,11 @@ function selectWildcard(
     
     const artist = candidate.track.artist_name.toLowerCase();
     if (selectedArtists.has(artist)) continue;
+    
+    // IMPORTANT: Ensure genre compatibility even for wildcard
+    if (seedGenres && !areGenresCompatible(seedGenres, candidate.track.genres)) {
+      continue;
+    }
     
     const diff = Math.abs(candidate.total_score - targetScore);
     if (diff < bestDiff && candidate.total_score >= 0.45) {
@@ -1002,7 +1020,8 @@ export async function generatePairing(input: PairingInput): Promise<PairingResul
       selectedArtists,
       selectedIds,
       selectedGenres,
-      config.flavor_threshold
+      config.flavor_threshold,
+      seedTrack.genres // Pass seed genres to enforce genre compatibility
     );
     
     if (flavor) {
@@ -1027,7 +1046,7 @@ export async function generatePairing(input: PairingInput): Promise<PairingResul
 
   // SLOT 6: Wildcard (controlled stretch)
   console.log(`\nSelecting Wildcard track...`);
-  const wildcard = selectWildcard(scoredCandidates, selectedArtists, selectedIds, mode);
+  const wildcard = selectWildcard(scoredCandidates, selectedArtists, selectedIds, mode, seedTrack.genres);
   
   if (wildcard) {
     selectedTracks.push({
