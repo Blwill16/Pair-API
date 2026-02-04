@@ -279,10 +279,12 @@ export async function POST(request: NextRequest) {
             explanation: t.explanation,
             slot_type: t.slot_type,
             slot_position: t.slot_position,
+            genres: t.track.genres, // Include genres for debugging
           })),
           mode: pairingResult.mode,
           session_id: pairingResult.session_id,
-          excluded_count: pairingResult.excluded_count
+          excluded_count: pairingResult.excluded_count,
+          _version: "v2.1-strict-genre-filter" // Version marker for deployment verification
         });
       } catch (pairBrainError) {
         const errorMessage = pairBrainError instanceof Error ? pairBrainError.message : String(pairBrainError);
