@@ -869,11 +869,30 @@ export async function generatePairing(input: PairingInput): Promise<PairingResul
   console.log(`User vector: ${userVector ? `${userVector.positive_count} positive events` : "none"}`);
 
   // Generate candidates (200-500)
-  const candidates = await generateCandidates(seedTrack, exclusions, mode);
+  let candidates = await generateCandidates(seedTrack, exclusions, mode);
   console.log(`Generated ${candidates.length} candidates`);
 
+  // If no candidates, try again with relaxed genre filter (adventure mode)
   if (candidates.length === 0) {
-    throw new Error("No candidates available after filtering");
+    console.log("No candidates found, retrying with relaxed genre filter...");
+    candidates = await generateCandidates(seedTrack, exclusions, "adventure");
+    console.log(`Retry generated ${candidates.length} candidates`);
+  }
+
+  if (candidates.length === 0) {
+    // Last resort: search for the seed artist's tracks directly
+    console.log("Still no candidates, searching for seed artist tracks...");
+    const artistTracks = await searchAppleMusicTracks(seedTrack.artist_name, 50);
+    for (const track of artistTracks) {
+      if (track.apple_music_id !== seedTrack.apple_music_id) {
+        candidates.push(track);
+      }
+    }
+    console.log(`Artist search found ${candidates.length} candidates`);
+  }
+
+  if (candidates.length === 0) {
+    throw new Error("No candidates available after all fallback strategies");
   }
 
   // Score all candidates
