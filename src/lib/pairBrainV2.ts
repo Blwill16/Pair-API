@@ -2,7 +2,7 @@
 // Implements the Pair Algorithm Spec v1
 // No third-party similarity APIs. Apple Music is catalog only. Pair owns taste.
 
-import { PairTrack, getAppleMusicTrack, searchAppleMusicTracks } from "./appleMusic";
+import { PairTrack, getAppleMusicTrack, searchAppleMusicTracks, getAppleMusicRelatedTracks } from "./appleMusic";
 import { supabase } from "./supabase";
 
 // ============================================================================
@@ -554,99 +554,84 @@ async function generateCandidates(
     return true;
   };
   
-  console.log(`Seed track genres: ${JSON.stringify(seedTrack.genres)}`);
+  console.log(`\n========================================`);
+  console.log(`2-STAGE PIPELINE: Generating candidates`);
+  console.log(`Seed: ${seedTrack.track_name} by ${seedTrack.artist_name}`);
+  console.log(`Seed genres: ${JSON.stringify(seedTrack.genres)}`);
+  console.log(`Mode: ${mode}`);
+  console.log(`========================================\n`);
 
-  // Sanitize artist name for search queries
-  const sanitizedArtist = sanitizeSearchQuery(seedTrack.artist_name);
-  console.log(`Generating candidates for: ${seedTrack.track_name} by ${seedTrack.artist_name} (sanitized: ${sanitizedArtist}) (mode: ${mode})`);
-
-  // Apple Music API has a max limit of 25 results per search
-  const APPLE_MUSIC_LIMIT = 25;
-  
   try {
-    // STRATEGY 1: Same artist deep cuts (30% of candidates)
-    const artistTracks = await searchAppleMusicTracks(sanitizedArtist, APPLE_MUSIC_LIMIT);
-    console.log(`Search returned ${artistTracks.length} tracks for artist "${sanitizedArtist}"`);
-    if (artistTracks.length > 0) {
-      console.log(`First track genres: ${JSON.stringify(artistTracks[0].genres)}`);
+    // ============================================================================
+    // STAGE 1: USE getAppleMusicRelatedTracks (playlist co-occurrence + similar artists)
+    // This is the KEY signal - songs curated together in playlists are most similar
+    // ============================================================================
+    console.log(`STAGE 1: Getting related tracks via playlist co-occurrence...`);
+    const relatedTracks = await getAppleMusicRelatedTracks(seedTrack, Array.from(seenIds), 100);
+    console.log(`Got ${relatedTracks.length} tracks from 2-stage pipeline`);
+    
+    // Add all related tracks (they already come from playlist co-occurrence)
+    for (const track of relatedTracks) {
+      // Check if track has playlist co-occurrence source (highest priority)
+      const isPlaylistTrack = (track as PairTrack & { _source?: string })._source === 'playlist_cooccurrence';
+      if (isPlaylistTrack) {
+        // Playlist co-occurrence tracks get added with relaxed genre filter
+        // because being in the same playlist is a strong similarity signal
+        addCandidate(track, mode !== "same_sound"); // Only strict genre filter for same_sound
+      } else {
+        addCandidate(track, true); // Normal genre filter for other sources
+      }
     }
-    for (const track of artistTracks) {
-      if (candidates.length >= 60) break;
-      addCandidate(track);
-    }
-    console.log(`After same artist: ${candidates.length} candidates (filtered: seen=${seenCount}, excluded=${excludedCount}, genre=${genreFilteredCount})`);
+    console.log(`After Stage 1: ${candidates.length} candidates (filtered ${genreFilteredCount} by genre)`);
 
-    // STRATEGY 2: Related artists (1-hop) - search for similar artists
-    const relatedQueries = [
-      `${sanitizedArtist} similar`,
-      `artists like ${sanitizedArtist}`,
-    ];
-    for (const query of relatedQueries) {
-      const relatedTracks = await searchAppleMusicTracks(query, APPLE_MUSIC_LIMIT);
-      for (const track of relatedTracks) {
-        if (candidates.length >= 120) break;
+    // ============================================================================
+    // STAGE 2: FILL WITH ADDITIONAL SEARCHES IF NEEDED
+    // Only if we don't have enough candidates from playlist co-occurrence
+    // ============================================================================
+    if (candidates.length < 50) {
+      console.log(`STAGE 2: Need more candidates, doing additional searches...`);
+      const sanitizedArtist = sanitizeSearchQuery(seedTrack.artist_name);
+      const APPLE_MUSIC_LIMIT = 25;
+      
+      // Search for same artist tracks
+      const artistTracks = await searchAppleMusicTracks(sanitizedArtist, APPLE_MUSIC_LIMIT);
+      for (const track of artistTracks) {
+        if (candidates.length >= 80) break;
         addCandidate(track);
       }
-    }
-    console.log(`After related artists: ${candidates.length} candidates`);
-
-    // STRATEGY 3: Genre + era matching
-    if (seedTrack.genres && seedTrack.genres.length > 0) {
-      const releaseYear = seedTrack.release_date?.substring(0, 4);
-      for (const genre of seedTrack.genres.slice(0, 3)) {
-        const genreQuery = releaseYear ? `${genre} ${releaseYear}s` : genre;
-        const genreTracks = await searchAppleMusicTracks(genreQuery, APPLE_MUSIC_LIMIT);
-        for (const track of genreTracks) {
-          if (candidates.length >= 200) break;
-          addCandidate(track);
+      console.log(`After artist search: ${candidates.length} candidates`);
+      
+      // Search for genre-specific tracks
+      if (seedTrack.genres && seedTrack.genres.length > 0) {
+        for (const genre of seedTrack.genres.slice(0, 2)) {
+          const cleanGenre = genre.toLowerCase().replace('music', '').trim();
+          if (cleanGenre.length < 3) continue;
+          
+          const genreTracks = await searchAppleMusicTracks(`${cleanGenre} songs`, APPLE_MUSIC_LIMIT);
+          for (const track of genreTracks) {
+            if (candidates.length >= 100) break;
+            addCandidate(track);
+          }
         }
       }
+      console.log(`After genre search: ${candidates.length} candidates`);
     }
-    console.log(`After genre matching: ${candidates.length} candidates`);
 
-    // STRATEGY 4: Adjacent genres (for adventure mode)
-    if (mode === "adventure" && seedTrack.genres) {
+    // Adventure mode: add some adjacent genre tracks
+    if (mode === "adventure" && candidates.length < 80 && seedTrack.genres) {
+      console.log(`Adventure mode: adding adjacent genre tracks...`);
       const adjacentGenres = getAdjacentGenres(seedTrack.genres);
-      for (const genre of adjacentGenres.slice(0, 3)) {
-        const adjacentTracks = await searchAppleMusicTracks(genre, APPLE_MUSIC_LIMIT);
+      for (const genre of adjacentGenres.slice(0, 2)) {
+        const adjacentTracks = await searchAppleMusicTracks(genre, 15);
         for (const track of adjacentTracks) {
-          if (candidates.length >= 280) break;
-          addCandidate(track);
-        }
-      }
-    }
-    console.log(`After adjacent genres: ${candidates.length} candidates`);
-
-    // STRATEGY 5: Seed track name variations
-    const trackWords = seedTrack.track_name.split(/\s+/).filter(w => w.length > 3);
-    for (const word of trackWords.slice(0, 2)) {
-      const wordTracks = await searchAppleMusicTracks(word, APPLE_MUSIC_LIMIT);
-      for (const track of wordTracks) {
-        if (candidates.length >= 350) break;
-        addCandidate(track);
-      }
-    }
-    console.log(`After track name search: ${candidates.length} candidates`);
-
-    // STRATEGY 6: Fill with broader genre search (but still genre-compatible)
-    if (candidates.length < 100 && seedTrack.genres && seedTrack.genres.length > 0) {
-      // Use more specific genre searches instead of just "Music"
-      const genreSearches = [
-        seedTrack.genres[0], // Primary genre
-        `${seedTrack.genres[0]} hits`,
-        `best ${seedTrack.genres[0]}`,
-        `top ${seedTrack.genres[0]} songs`,
-      ];
-      for (const genreQuery of genreSearches) {
-        const fillTracks = await searchAppleMusicTracks(genreQuery, APPLE_MUSIC_LIMIT);
-        for (const track of fillTracks) {
-          if (candidates.length >= 200) break;
-          addCandidate(track); // Genre filter still applies here
+          if (candidates.length >= 100) break;
+          addCandidate(track, false); // Relaxed genre filter for adventure
         }
       }
     }
 
-    console.log(`Final candidate count: ${candidates.length} (filtered ${genreFilteredCount} by genre)`);
+    console.log(`\nFinal candidate count: ${candidates.length} (filtered ${genreFilteredCount} by genre)`);
+    console.log(`========================================\n`);
     return candidates;
   } catch (error) {
     console.error("Error generating candidates:", error);
