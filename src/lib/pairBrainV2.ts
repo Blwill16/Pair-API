@@ -1009,6 +1009,9 @@ export async function savePairingToHistory(
   userId: string
 ): Promise<void> {
   try {
+    // Generate a unique pairing_set_id for this batch of 6 tracks
+    const pairingSetId = crypto.randomUUID();
+    
     for (const slottedTrack of result.tracks) {
       // Ensure track exists in pair_tracks
       let { data: pairTrack } = await supabase
@@ -1070,6 +1073,7 @@ export async function savePairingToHistory(
         await supabase.from("pairing_history").insert({
           user_id: userId,
           session_id: result.session_id,
+          pairing_set_id: pairingSetId,
           seed_track_id: seedPairTrack.id,
           recommended_track_id: pairTrack.id,
           slot_type: slottedTrack.slot_type,
