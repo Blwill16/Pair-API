@@ -913,8 +913,10 @@ export async function generatePairing(input: PairingInput): Promise<PairingResul
 
   if (candidates.length === 0) {
     // Last resort: search for the seed artist's tracks directly
+    const sanitizedArtist = sanitizeSearchQuery(seedTrack.artist_name);
     console.log("Still no candidates, searching for seed artist tracks...");
-    const artistTracks = await searchAppleMusicTracks(seedTrack.artist_name, 50);
+    console.log(`Searching for: "${sanitizedArtist}" (original: "${seedTrack.artist_name}")`);
+    const artistTracks = await searchAppleMusicTracks(sanitizedArtist, 50);
     for (const track of artistTracks) {
       if (track.apple_music_id !== seedTrack.apple_music_id) {
         candidates.push(track);
