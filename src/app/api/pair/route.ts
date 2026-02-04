@@ -284,7 +284,7 @@ export async function POST(request: NextRequest) {
           mode: pairingResult.mode,
           session_id: pairingResult.session_id,
           excluded_count: pairingResult.excluded_count,
-          _version: "v2.1-strict-genre-filter" // Version marker for deployment verification
+          _version: "v2.2-playlist-cooccurrence" // Version marker for deployment verification
         });
       } catch (pairBrainError) {
         const errorMessage = pairBrainError instanceof Error ? pairBrainError.message : String(pairBrainError);
