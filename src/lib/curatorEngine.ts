@@ -1027,14 +1027,18 @@ async function updateDropStatus(dropId: string, status: string): Promise<void> {
 }
 
 /**
- * Get current week's Friday date
+ * Get current week's Friday date (most recent Friday, or today if Friday)
  */
 function getWeekFriday(): string {
   const now = new Date();
-  const dayOfWeek = now.getDay();
-  const daysUntilFriday = (5 - dayOfWeek + 7) % 7;
+  const dayOfWeek = now.getDay(); // 0 = Sunday, 5 = Friday
+  
+  // Calculate days since last Friday
+  // If today is Friday (5), use today
+  let daysToSubtract = (dayOfWeek - 5 + 7) % 7;
+  
   const friday = new Date(now);
-  friday.setDate(now.getDate() + daysUntilFriday);
+  friday.setDate(now.getDate() - daysToSubtract);
   return friday.toISOString().split('T')[0];
 }
 
