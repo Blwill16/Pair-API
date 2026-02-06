@@ -964,7 +964,6 @@ function getWeekStartDate(): Date {
 /**
  * Fetch NEW RELEASES from Apple Music for the current week
  * This is the PRIMARY candidate source for Pair - we only show new music
- * Falls back to mock data if API is unavailable or returns no results
  */
 export async function getAppleMusicNewReleases(limit: number = 100): Promise<PairTrack[]> {
   if (MOCK_APPLE_MUSIC) {
@@ -974,8 +973,8 @@ export async function getAppleMusicNewReleases(limit: number = 100): Promise<Pai
 
   const developerToken = await getAppleMusicDeveloperToken();
   if (!developerToken) {
-    console.log("[New Releases] No Apple Music token - falling back to mock data");
-    return mockAppleMusicTracks.slice(0, limit);
+    console.error("[New Releases] No Apple Music token available - cannot fetch new releases");
+    return [];
   }
 
   const candidates: PairTrack[] = [];
@@ -1098,22 +1097,10 @@ export async function getAppleMusicNewReleases(limit: number = 100): Promise<Pai
     }
 
     console.log(`[New Releases] Found ${candidates.length} new releases from this week`);
-    
-    // If we found no candidates, fall back to mock data
-    if (candidates.length === 0) {
-      console.log("[New Releases] No real releases found - falling back to mock data");
-      return mockAppleMusicTracks.slice(0, limit);
-    }
-    
     return candidates;
 
   } catch (error) {
     console.error("[New Releases] Error fetching new releases:", error);
-    // Fall back to mock data on error
-    if (candidates.length === 0) {
-      console.log("[New Releases] Error occurred - falling back to mock data");
-      return mockAppleMusicTracks.slice(0, limit);
-    }
     return candidates;
   }
 }
