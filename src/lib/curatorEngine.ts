@@ -107,7 +107,7 @@ const BROAD_GENRES: BroadGenre[] = [
   {
     slug: 'electronic',
     display_name: 'Electronic',
-    keywords: ['electronic', 'edm', 'dance', 'house', 'techno', 'trance', 'melodic', 'progressive', 'deep house', 'tech house', 'minimal', 'ambient', 'electronica', 'synth']
+    keywords: ['electronic', 'edm', 'dance', 'house', 'techno', 'trance', 'melodic', 'progressive', 'deep house', 'tech house', 'minimal', 'electronica', 'synth']
   },
   {
     slug: 'indie-alternative',
@@ -121,7 +121,7 @@ const BROAD_GENRES: BroadGenre[] = [
   },
   {
     slug: 'hip-hop',
-    display_name: 'Hip-Hop',
+    display_name: 'Hip-Hop/Rap',
     keywords: ['hip-hop', 'hip hop', 'rap', 'trap', 'drill', 'hiphop']
   },
   {
@@ -142,7 +142,12 @@ const BROAD_GENRES: BroadGenre[] = [
   {
     slug: 'folk-singer-songwriter',
     display_name: 'Folk / Singer-Songwriter',
-    keywords: ['folk', 'indie folk', 'americana', 'singer-songwriter', 'acoustic', 'country']
+    keywords: ['folk', 'indie folk', 'americana', 'singer-songwriter', 'acoustic']
+  },
+  {
+    slug: 'country',
+    display_name: 'Country',
+    keywords: ['country', 'country pop', 'country rock', 'outlaw country', 'nashville', 'bluegrass']
   },
   {
     slug: 'jazz',
@@ -1116,12 +1121,41 @@ function getWeekFriday(): string {
 /**
  * Get user's current weekly drop
  */
-export async function getCurrentWeeklyDrop(userId: string, preferredGenres?: string[]): Promise<{
+export async function getCurrentWeeklyDrop(userId: string, preferredGenres?: string[], forceRefresh?: boolean): Promise<{
   drop: WeeklyDrop | null;
   tracks: WeeklyDropTrack[];
   genres: Record<string, WeeklyDropTrack[]>;
 }> {
   const weekStartDate = getWeekFriday();
+  
+  // If force refresh, delete existing drop first
+  if (forceRefresh) {
+    console.log(`[Curator V2] Force refresh requested - deleting existing drop for user ${userId}`);
+    
+    // Get existing drop ID
+    const { data: existingDrop } = await supabase
+      .from('weekly_drops')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('week_start_date', weekStartDate)
+      .single();
+    
+    if (existingDrop) {
+      // Delete associated tracks first
+      await supabase
+        .from('weekly_drop_tracks')
+        .delete()
+        .eq('weekly_drop_id', existingDrop.id);
+      
+      // Delete the drop
+      await supabase
+        .from('weekly_drops')
+        .delete()
+        .eq('id', existingDrop.id);
+      
+      console.log(`[Curator V2] Deleted existing drop ${existingDrop.id}`);
+    }
+  }
   
   // Get or generate drop
   let { data: drop } = await supabase
