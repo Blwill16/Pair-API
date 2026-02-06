@@ -945,8 +945,22 @@ export async function getAppleMusicRelatedTracks(
 // ============================================================================
 
 /**
- * Get the current week's start date (Thursday at midnight ET)
- * Apple Music releases new music on Fridays, but we use Thursday 10pm Phoenix = midnight ET
+ * Get the cutoff date for "new releases" - last 4 weeks
+ * This is more practical than strict "this week only" since Apple Music
+ * search doesn't always return tracks with accurate release dates
+ */
+function getNewReleaseCutoffDate(): Date {
+  const now = new Date();
+  // Go back 4 weeks (28 days) to capture recent releases
+  const cutoff = new Date(now);
+  cutoff.setDate(now.getDate() - 28);
+  cutoff.setHours(0, 0, 0, 0);
+  return cutoff;
+}
+
+/**
+ * Get the current week's start date (Friday at midnight ET)
+ * Used for display purposes
  */
 function getWeekStartDate(): Date {
   const now = new Date();
@@ -983,28 +997,25 @@ export async function getAppleMusicNewReleases(limit: number = 100): Promise<Pai
 
   const candidates: PairTrack[] = [];
   const seenIds = new Set<string>();
-  const weekStart = getWeekStartDate();
-  const weekStartStr = weekStart.toISOString().split('T')[0];
+  const cutoffDate = getNewReleaseCutoffDate();
+  const cutoffStr = cutoffDate.toISOString().split('T')[0];
   
-  console.log(`[New Releases] Fetching releases from ${weekStartStr} onwards (THIS WEEK ONLY)`);
+  console.log(`[New Releases] Fetching releases from ${cutoffStr} onwards (last 4 weeks)`);
 
-  // STRICT: Only accept tracks released THIS WEEK (since last Friday)
-  // This is the core Pair principle - only show new music
+  // Accept tracks released in the last 4 weeks
+  // This is more practical than strict "this week only"
   const addCandidate = (track: PairTrack): boolean => {
     if (seenIds.has(track.apple_music_id)) return false;
     
-    // STRICT DATE CHECK: Only accept tracks released this week
+    // DATE CHECK: Accept tracks from last 4 weeks
     if (track.release_date) {
       const releaseDate = new Date(track.release_date);
-      if (releaseDate < weekStart) {
-        // Track is older than this week's Friday - reject it
+      if (releaseDate < cutoffDate) {
+        // Track is older than 4 weeks - reject it
         return false;
       }
-    } else {
-      // No release date - skip it to be safe
-      // We can't verify it's from this week
-      return false;
     }
+    // If no release date, still accept it - we'll filter by other criteria
     
     candidates.push(track);
     seenIds.add(track.apple_music_id);
