@@ -1062,33 +1062,171 @@ export async function generateWeeklyDrop(userId: string, preferredGenres?: strin
 }
 
 /**
- * Assign a track to a broad genre based on its genre tags
+ * PAIR GENRE TAXONOMY - Controlled list of genres for display
+ * Each track is assigned to exactly ONE genre
  */
-function assignToBroadGenre(track: PairTrack): BroadGenre {
-  const trackGenres = (track.genres || []).map(g => g.toLowerCase());
+const PAIR_GENRES: BroadGenre[] = [
+  {
+    slug: 'electronic',
+    display_name: 'Electronic',
+    keywords: ['electronic', 'edm', 'house', 'techno', 'trance', 'deep house', 'tech house', 'electronica', 'dubstep', 'drum and bass', 'dnb', 'bass music']
+  },
+  {
+    slug: 'dance',
+    display_name: 'Dance',
+    keywords: ['dance', 'dance pop', 'disco', 'club', 'dj']
+  },
+  {
+    slug: 'indie',
+    display_name: 'Indie',
+    keywords: ['indie', 'indie rock', 'indie pop', 'indie folk', 'indie electronic']
+  },
+  {
+    slug: 'alternative',
+    display_name: 'Alternative',
+    keywords: ['alternative', 'alt-rock', 'alternative rock', 'new wave', 'post-punk']
+  },
+  {
+    slug: 'rnb-soul',
+    display_name: 'R&B / Soul',
+    keywords: ['r&b', 'rnb', 'soul', 'neo soul', 'contemporary r&b', 'rhythm and blues', 'urban']
+  },
+  {
+    slug: 'hip-hop',
+    display_name: 'Hip-Hop',
+    keywords: ['hip-hop', 'hip hop', 'rap', 'trap', 'drill', 'hiphop', 'gangsta']
+  },
+  {
+    slug: 'pop',
+    display_name: 'Pop',
+    keywords: ['pop', 'synth pop', 'electropop', 'art pop', 'teen pop', 'k-pop', 'j-pop']
+  },
+  {
+    slug: 'rock',
+    display_name: 'Rock',
+    keywords: ['rock', 'hard rock', 'punk', 'metal', 'grunge', 'classic rock']
+  },
+  {
+    slug: 'folk-acoustic',
+    display_name: 'Folk / Acoustic',
+    keywords: ['folk', 'acoustic', 'singer-songwriter', 'americana', 'bluegrass']
+  },
+  {
+    slug: 'country',
+    display_name: 'Country',
+    keywords: ['country', 'country pop', 'country rock', 'nashville', 'outlaw country']
+  },
+  {
+    slug: 'jazz',
+    display_name: 'Jazz',
+    keywords: ['jazz', 'jazz fusion', 'smooth jazz', 'bebop', 'swing']
+  },
+  {
+    slug: 'latin',
+    display_name: 'Latin',
+    keywords: ['latin', 'reggaeton', 'salsa', 'bachata', 'cumbia', 'latin pop', 'spanish', 'mexican']
+  },
+  {
+    slug: 'other',
+    display_name: 'Other',
+    keywords: [] // Fallback genre - no keywords, assigned when confidence is low
+  }
+];
+
+// Fallback genre when we can't confidently map
+const FALLBACK_GENRE = PAIR_GENRES.find(g => g.slug === 'other')!;
+
+/**
+ * Deterministic genre mapping function
+ * Maps Apple Music genres to exactly ONE Pair genre
+ * 
+ * Rules:
+ * 1. Each track gets exactly one genre assignment
+ * 2. If confidence is low (no strong match), assign to "Other"
+ * 3. Priority order matters - first strong match wins
+ * 
+ * @returns { genre: BroadGenre, confidence: number }
+ */
+interface GenreMapping {
+  genre: BroadGenre;
+  confidence: number; // 0-1, where 1 = perfect match
+}
+
+function mapAppleGenresToPairGenre(
+  appleGenres: string[] | undefined,
+  artistName?: string
+): GenreMapping {
+  if (!appleGenres || appleGenres.length === 0) {
+    return { genre: FALLBACK_GENRE, confidence: 0 };
+  }
   
-  // Score each broad genre
-  let bestMatch: BroadGenre = BROAD_GENRES[4]; // Default to Pop
-  let bestScore = 0;
+  const normalizedGenres = appleGenres.map(g => g.toLowerCase().trim());
   
-  for (const broadGenre of BROAD_GENRES) {
-    let score = 0;
+  // Score each Pair genre
+  const scores: Array<{ genre: BroadGenre; score: number; matchCount: number }> = [];
+  
+  for (const pairGenre of PAIR_GENRES) {
+    if (pairGenre.slug === 'other') continue; // Skip fallback in scoring
     
-    for (const trackGenre of trackGenres) {
-      for (const keyword of broadGenre.keywords) {
-        if (trackGenre.includes(keyword) || keyword.includes(trackGenre)) {
+    let score = 0;
+    let matchCount = 0;
+    
+    for (const appleGenre of normalizedGenres) {
+      for (const keyword of pairGenre.keywords) {
+        // Exact match gets highest score
+        if (appleGenre === keyword) {
+          score += 3;
+          matchCount++;
+        }
+        // Apple genre contains keyword
+        else if (appleGenre.includes(keyword)) {
+          score += 2;
+          matchCount++;
+        }
+        // Keyword contains apple genre (less reliable)
+        else if (keyword.includes(appleGenre) && appleGenre.length >= 3) {
           score += 1;
+          matchCount++;
         }
       }
     }
     
-    if (score > bestScore) {
-      bestScore = score;
-      bestMatch = broadGenre;
+    if (score > 0) {
+      scores.push({ genre: pairGenre, score, matchCount });
     }
   }
   
-  return bestMatch;
+  // Sort by score descending
+  scores.sort((a, b) => b.score - a.score);
+  
+  // If no matches or low confidence, return fallback
+  if (scores.length === 0) {
+    return { genre: FALLBACK_GENRE, confidence: 0 };
+  }
+  
+  const bestMatch = scores[0];
+  
+  // Calculate confidence based on score and match count
+  // Max possible score per genre is roughly 3 * number of apple genres
+  const maxPossibleScore = normalizedGenres.length * 3;
+  const confidence = Math.min(1, bestMatch.score / Math.max(maxPossibleScore, 3));
+  
+  // If confidence is too low (< 0.3), use fallback
+  if (confidence < 0.3 && bestMatch.matchCount < 2) {
+    return { genre: FALLBACK_GENRE, confidence: confidence };
+  }
+  
+  return { genre: bestMatch.genre, confidence };
+}
+
+/**
+ * Assign a track to a broad genre based on its genre tags
+ * DETERMINISTIC: Returns exactly one genre per track
+ * Uses mapAppleGenresToPairGenre for consistent mapping
+ */
+function assignToBroadGenre(track: PairTrack): BroadGenre {
+  const { genre } = mapAppleGenresToPairGenre(track.genres, track.artist_name);
+  return genre;
 }
 
 async function updateDropStatus(dropId: string, status: string): Promise<void> {

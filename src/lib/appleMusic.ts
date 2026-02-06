@@ -945,43 +945,82 @@ export async function getAppleMusicRelatedTracks(
 // ============================================================================
 
 /**
- * Get the cutoff date for "new releases" - last 4 weeks
- * This is more practical than strict "this week only" since Apple Music
- * search doesn't always return tracks with accurate release dates
+ * Get the weekly window for new releases
+ * Phoenix timezone: Thursday 10:00 PM to next Thursday 9:59 PM
+ * This corresponds to Friday 5:00 AM UTC to next Friday 4:59 AM UTC
+ * 
+ * Returns { start: Date, end: Date } for the current weekly window
  */
-function getNewReleaseCutoffDate(): Date {
+function getWeeklyWindow(): { start: Date; end: Date; weekId: string } {
   const now = new Date();
-  // Go back 4 weeks (28 days) to capture recent releases
-  const cutoff = new Date(now);
-  cutoff.setDate(now.getDate() - 28);
-  cutoff.setHours(0, 0, 0, 0);
-  return cutoff;
+  
+  // Convert to Phoenix timezone (America/Phoenix = UTC-7, no DST)
+  const phoenixOffset = -7 * 60; // -7 hours in minutes
+  const phoenixTime = new Date(now.getTime() + (now.getTimezoneOffset() + phoenixOffset) * 60000);
+  
+  // Find the most recent Thursday 10pm Phoenix
+  const dayOfWeek = phoenixTime.getDay(); // 0 = Sunday, 4 = Thursday
+  const hour = phoenixTime.getHours();
+  
+  // Calculate days since last Thursday 10pm
+  let daysToSubtract = (dayOfWeek - 4 + 7) % 7;
+  
+  // If it's Thursday but before 10pm, go back to previous Thursday
+  if (dayOfWeek === 4 && hour < 22) {
+    daysToSubtract = 7;
+  }
+  
+  // Calculate window start (Thursday 10pm Phoenix = Friday 5am UTC)
+  const windowStart = new Date(phoenixTime);
+  windowStart.setDate(phoenixTime.getDate() - daysToSubtract);
+  windowStart.setHours(22, 0, 0, 0);
+  
+  // Convert back to UTC
+  const startUTC = new Date(windowStart.getTime() - (now.getTimezoneOffset() + phoenixOffset) * 60000);
+  
+  // Window end is 7 days later
+  const endUTC = new Date(startUTC.getTime() + 7 * 24 * 60 * 60 * 1000);
+  
+  // Week ID is the Friday date (for display)
+  const fridayDate = new Date(startUTC);
+  fridayDate.setUTCHours(12, 0, 0, 0); // Noon UTC on Friday
+  const weekId = fridayDate.toISOString().split('T')[0];
+  
+  return { start: startUTC, end: endUTC, weekId };
 }
 
 /**
- * Get the current week's start date (Friday at midnight ET)
- * Used for display purposes
+ * Check if a release date falls within the current weekly window
+ * STRICT: Only returns true if release_date is within this week's window
+ */
+function isWithinWeeklyWindow(releaseDate: string | undefined): boolean {
+  if (!releaseDate) return false;
+  
+  const { start, end } = getWeeklyWindow();
+  const release = new Date(releaseDate);
+  
+  // Apple Music release dates are in YYYY-MM-DD format (no time)
+  // Treat as start of day UTC
+  release.setUTCHours(0, 0, 0, 0);
+  
+  return release >= start && release < end;
+}
+
+/**
+ * Get the current week's start date (Friday)
+ * Used for display purposes and week identification
  */
 function getWeekStartDate(): Date {
-  const now = new Date();
-  // Convert to New York timezone
-  const nyTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
-  const dayOfWeek = nyTime.getDay(); // 0 = Sunday, 5 = Friday, 6 = Saturday
-  
-  // Calculate days since last Friday (dayOfWeek 5)
-  // If today is Friday, use today
-  let daysToSubtract = (dayOfWeek - 5 + 7) % 7;
-  
-  const weekStart = new Date(nyTime);
-  weekStart.setDate(nyTime.getDate() - daysToSubtract);
-  weekStart.setHours(0, 0, 0, 0);
-  
-  return weekStart;
+  const { start } = getWeeklyWindow();
+  return start;
 }
 
 /**
- * Fetch NEW RELEASES from Apple Music for the current week
- * This is the PRIMARY candidate source for Pair - we only show new music
+ * Fetch NEW RELEASES from Apple Music for the current weekly window
+ * STRICT: Only returns tracks with release_date within this week's window
+ * 
+ * Weekly window: Thursday 10pm Phoenix to next Thursday 9:59pm Phoenix
+ * If no tracks pass the filter, returns empty array (do NOT backfill old tracks)
  */
 export async function getAppleMusicNewReleases(limit: number = 100): Promise<PairTrack[]> {
   if (MOCK_APPLE_MUSIC) {
@@ -997,67 +1036,48 @@ export async function getAppleMusicNewReleases(limit: number = 100): Promise<Pai
 
   const candidates: PairTrack[] = [];
   const seenIds = new Set<string>();
-  const cutoffDate = getNewReleaseCutoffDate();
-  const cutoffStr = cutoffDate.toISOString().split('T')[0];
+  const { start, end, weekId } = getWeeklyWindow();
   
-  console.log(`[New Releases] Fetching releases from ${cutoffStr} onwards (last 4 weeks)`);
+  console.log(`[New Releases] Weekly window: ${start.toISOString()} to ${end.toISOString()}`);
+  console.log(`[New Releases] Week ID: ${weekId}`);
 
-  // Accept tracks released in the last 4 weeks
-  // This is more practical than strict "this week only"
+  // Helper to convert Apple Music song to PairTrack
+  const songToPairTrack = (song: any): PairTrack => ({
+    apple_music_id: song.id,
+    track_name: song.attributes.name,
+    artist_name: song.attributes.artistName,
+    album_name: song.attributes.albumName,
+    album_art_url: song.attributes.artwork?.url
+      ?.replace("{w}", "600")
+      ?.replace("{h}", "600"),
+    preview_url: song.attributes.previews?.[0]?.url,
+    duration_ms: song.attributes.durationInMillis,
+    release_date: song.attributes.releaseDate,
+    genres: song.attributes.genreNames,
+    isrc: song.attributes.isrc,
+  });
+
+  // STRICT: Only accept tracks released within this week's window
   const addCandidate = (track: PairTrack): boolean => {
     if (seenIds.has(track.apple_music_id)) return false;
     
-    // DATE CHECK: Accept tracks from last 4 weeks
-    if (track.release_date) {
-      const releaseDate = new Date(track.release_date);
-      if (releaseDate < cutoffDate) {
-        // Track is older than 4 weeks - reject it
-        return false;
-      }
+    // STRICT DATE CHECK: Must have release_date within weekly window
+    if (!isWithinWeeklyWindow(track.release_date)) {
+      return false;
     }
-    // If no release date, still accept it - we'll filter by other criteria
     
     candidates.push(track);
     seenIds.add(track.apple_music_id);
     return true;
   };
 
+  let totalFetched = 0;
+  let passedFilter = 0;
+
   try {
-    // STRATEGY 1: Search for "new" + genre terms to find recent releases
-    const newReleaseQueries = [
-      'new music 2026',
-      'new releases',
-      'new songs this week',
-      'just released',
-      'new album 2026',
-      // Genre-specific new releases
-      'new electronic music',
-      'new indie music',
-      'new r&b',
-      'new hip hop',
-      'new pop music',
-      'new rock music',
-      'new alternative',
-      'new dance music',
-      'new soul music',
-      'new jazz',
-    ];
-
-    for (const query of newReleaseQueries) {
-      if (candidates.length >= limit) break;
-      
-      console.log(`[New Releases] Searching: "${query}"`);
-      const results = await searchAppleMusicTracks(query, 50);
-      
-      for (const track of results) {
-        if (candidates.length >= limit) break;
-        addCandidate(track);
-      }
-    }
-
-    // STRATEGY 2: Fetch from Apple Music charts (most-played new songs)
+    // STRATEGY 1: Fetch from Apple Music charts (most reliable source)
     console.log(`[New Releases] Fetching from charts...`);
-    const chartsUrl = `https://api.music.apple.com/v1/catalog/us/charts?types=songs&limit=50`;
+    const chartsUrl = `https://api.music.apple.com/v1/catalog/us/charts?types=songs&limit=100`;
     
     const chartsResponse = await fetch(chartsUrl, {
       headers: { Authorization: `Bearer ${developerToken}` }
@@ -1066,53 +1086,89 @@ export async function getAppleMusicNewReleases(limit: number = 100): Promise<Pai
     if (chartsResponse.ok) {
       const chartsData = await chartsResponse.json();
       const chartSongs = chartsData.results?.songs?.[0]?.data || [];
+      totalFetched += chartSongs.length;
       
       for (const song of chartSongs) {
+        const track = songToPairTrack(song);
+        if (addCandidate(track)) passedFilter++;
+      }
+      console.log(`[New Releases] Charts: ${chartSongs.length} fetched, ${passedFilter} passed date filter`);
+    }
+
+    // STRATEGY 2: Fetch new albums and their tracks
+    console.log(`[New Releases] Fetching new albums...`);
+    const albumChartsUrl = `https://api.music.apple.com/v1/catalog/us/charts?types=albums&limit=50`;
+    
+    const albumChartsResponse = await fetch(albumChartsUrl, {
+      headers: { Authorization: `Bearer ${developerToken}` }
+    });
+    
+    if (albumChartsResponse.ok) {
+      const albumData = await albumChartsResponse.json();
+      const chartAlbums = albumData.results?.albums?.[0]?.data || [];
+      
+      for (const album of chartAlbums.slice(0, 20)) {
         if (candidates.length >= limit) break;
         
-        const track: PairTrack = {
-          apple_music_id: song.id,
-          track_name: song.attributes.name,
-          artist_name: song.attributes.artistName,
-          album_name: song.attributes.albumName,
-          album_art_url: song.attributes.artwork?.url
-            ?.replace("{w}", "600")
-            ?.replace("{h}", "600"),
-          preview_url: song.attributes.previews?.[0]?.url,
-          duration_ms: song.attributes.durationInMillis,
-          release_date: song.attributes.releaseDate,
-          genres: song.attributes.genreNames,
-          isrc: song.attributes.isrc,
-        };
+        // Check album release date first
+        const albumReleaseDate = album.attributes?.releaseDate;
+        if (!isWithinWeeklyWindow(albumReleaseDate)) continue;
         
-        addCandidate(track);
+        // Fetch album tracks
+        try {
+          const albumTracksUrl = `https://api.music.apple.com/v1/catalog/us/albums/${album.id}/tracks?limit=20`;
+          const tracksResponse = await fetch(albumTracksUrl, {
+            headers: { Authorization: `Bearer ${developerToken}` }
+          });
+          
+          if (tracksResponse.ok) {
+            const tracksData = await tracksResponse.json();
+            const tracks = tracksData.data || [];
+            totalFetched += tracks.length;
+            
+            for (const song of tracks) {
+              const track = songToPairTrack(song);
+              // Use album release date if track doesn't have one
+              if (!track.release_date) {
+                track.release_date = albumReleaseDate;
+              }
+              if (addCandidate(track)) passedFilter++;
+            }
+          }
+        } catch (e) {
+          console.error(`[New Releases] Error fetching album tracks:`, e);
+        }
       }
     }
 
-    // STRATEGY 3: Search for specific recent release patterns
-    const currentYear = new Date().getFullYear();
-    const currentMonth = new Date().toLocaleString('en-US', { month: 'long' });
-    
-    const recentPatterns = [
-      `${currentMonth} ${currentYear} music`,
-      `february 2026 releases`,
-      `new single 2026`,
-      `debut single 2026`,
-    ];
-    
-    for (const pattern of recentPatterns) {
-      if (candidates.length >= limit) break;
+    // STRATEGY 3: Search for recent releases (supplementary)
+    // Only if we don't have enough candidates yet
+    if (candidates.length < limit / 2) {
+      const currentYear = new Date().getFullYear();
+      const searchQueries = [
+        `new music ${currentYear}`,
+        `new release ${currentYear}`,
+        `new single ${currentYear}`,
+      ];
       
-      console.log(`[New Releases] Searching: "${pattern}"`);
-      const results = await searchAppleMusicTracks(pattern, 30);
-      
-      for (const track of results) {
+      for (const query of searchQueries) {
         if (candidates.length >= limit) break;
-        addCandidate(track);
+        
+        console.log(`[New Releases] Searching: "${query}"`);
+        const results = await searchAppleMusicTracks(query, 50);
+        totalFetched += results.length;
+        
+        for (const track of results) {
+          if (addCandidate(track)) passedFilter++;
+        }
       }
     }
 
-    console.log(`[New Releases] Found ${candidates.length} new releases from this week`);
+    console.log(`[New Releases] SUMMARY: ${totalFetched} total fetched, ${passedFilter} passed strict date filter`);
+    console.log(`[New Releases] Returning ${candidates.length} tracks for week ${weekId}`);
+    
+    // IMPORTANT: If no tracks pass the filter, return empty array
+    // Do NOT backfill with old tracks - this is the core Pair principle
     return candidates;
 
   } catch (error) {
