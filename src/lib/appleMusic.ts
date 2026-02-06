@@ -928,4 +928,413 @@ export async function getAppleMusicRelatedTracks(
   }
 }
 
+// ============================================================================
+// NEW RELEASES FETCHER - Core function for Pair's weekly discovery
+// Fetches tracks released THIS WEEK from Apple Music
+// ============================================================================
+
+/**
+ * Get the current week's start date (Thursday at midnight ET)
+ * Apple Music releases new music on Fridays, but we use Thursday 10pm Phoenix = midnight ET
+ */
+function getWeekStartDate(): Date {
+  const now = new Date();
+  // Convert to New York timezone
+  const nyTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const dayOfWeek = nyTime.getDay(); // 0 = Sunday, 4 = Thursday, 5 = Friday
+  
+  // Calculate days since last Thursday
+  // If today is Thursday and before midnight, use last Thursday
+  let daysToSubtract = (dayOfWeek - 4 + 7) % 7;
+  if (daysToSubtract === 0) {
+    // It's Thursday - check if we should use this Thursday or last
+    const hour = nyTime.getHours();
+    if (hour < 22) { // Before 10pm Thursday (midnight ET equivalent for Phoenix)
+      daysToSubtract = 7;
+    }
+  }
+  
+  const weekStart = new Date(nyTime);
+  weekStart.setDate(nyTime.getDate() - daysToSubtract);
+  weekStart.setHours(0, 0, 0, 0);
+  
+  return weekStart;
+}
+
+/**
+ * Fetch NEW RELEASES from Apple Music for the current week
+ * This is the PRIMARY candidate source for Pair - we only show new music
+ */
+export async function getAppleMusicNewReleases(limit: number = 100): Promise<PairTrack[]> {
+  if (MOCK_APPLE_MUSIC) {
+    console.log("[New Releases] MOCK mode - returning mock tracks as new releases");
+    // In mock mode, return all mock tracks as "new releases"
+    return mockAppleMusicTracks.slice(0, limit);
+  }
+
+  const developerToken = await getAppleMusicDeveloperToken();
+  if (!developerToken) {
+    console.error("[New Releases] No Apple Music developer token available");
+    return [];
+  }
+
+  const candidates: PairTrack[] = [];
+  const seenIds = new Set<string>();
+  const weekStart = getWeekStartDate();
+  const weekStartStr = weekStart.toISOString().split('T')[0];
+  
+  console.log(`[New Releases] Fetching releases from ${weekStartStr} onwards`);
+
+  const addCandidate = (track: PairTrack): boolean => {
+    if (seenIds.has(track.apple_music_id)) return false;
+    
+    // Filter to only tracks released this week
+    if (track.release_date) {
+      const releaseDate = new Date(track.release_date);
+      if (releaseDate < weekStart) {
+        return false; // Not a new release
+      }
+    }
+    
+    candidates.push(track);
+    seenIds.add(track.apple_music_id);
+    return true;
+  };
+
+  try {
+    // STRATEGY 1: Search for "new" + genre terms to find recent releases
+    const newReleaseQueries = [
+      'new music 2026',
+      'new releases',
+      'new songs this week',
+      'just released',
+      'new album 2026',
+      // Genre-specific new releases
+      'new electronic music',
+      'new indie music',
+      'new r&b',
+      'new hip hop',
+      'new pop music',
+      'new rock music',
+      'new alternative',
+      'new dance music',
+      'new soul music',
+      'new jazz',
+    ];
+
+    for (const query of newReleaseQueries) {
+      if (candidates.length >= limit) break;
+      
+      console.log(`[New Releases] Searching: "${query}"`);
+      const results = await searchAppleMusicTracks(query, 50);
+      
+      for (const track of results) {
+        if (candidates.length >= limit) break;
+        addCandidate(track);
+      }
+    }
+
+    // STRATEGY 2: Fetch from Apple Music charts (most-played new songs)
+    console.log(`[New Releases] Fetching from charts...`);
+    const chartsUrl = `https://api.music.apple.com/v1/catalog/us/charts?types=songs&limit=50`;
+    
+    const chartsResponse = await fetch(chartsUrl, {
+      headers: { Authorization: `Bearer ${developerToken}` }
+    });
+    
+    if (chartsResponse.ok) {
+      const chartsData = await chartsResponse.json();
+      const chartSongs = chartsData.results?.songs?.[0]?.data || [];
+      
+      for (const song of chartSongs) {
+        if (candidates.length >= limit) break;
+        
+        const track: PairTrack = {
+          apple_music_id: song.id,
+          track_name: song.attributes.name,
+          artist_name: song.attributes.artistName,
+          album_name: song.attributes.albumName,
+          album_art_url: song.attributes.artwork?.url
+            ?.replace("{w}", "600")
+            ?.replace("{h}", "600"),
+          preview_url: song.attributes.previews?.[0]?.url,
+          duration_ms: song.attributes.durationInMillis,
+          release_date: song.attributes.releaseDate,
+          genres: song.attributes.genreNames,
+          isrc: song.attributes.isrc,
+        };
+        
+        addCandidate(track);
+      }
+    }
+
+    // STRATEGY 3: Search for specific recent release patterns
+    const currentYear = new Date().getFullYear();
+    const currentMonth = new Date().toLocaleString('en-US', { month: 'long' });
+    
+    const recentPatterns = [
+      `${currentMonth} ${currentYear} music`,
+      `february 2026 releases`,
+      `new single 2026`,
+      `debut single 2026`,
+    ];
+    
+    for (const pattern of recentPatterns) {
+      if (candidates.length >= limit) break;
+      
+      console.log(`[New Releases] Searching: "${pattern}"`);
+      const results = await searchAppleMusicTracks(pattern, 30);
+      
+      for (const track of results) {
+        if (candidates.length >= limit) break;
+        addCandidate(track);
+      }
+    }
+
+    console.log(`[New Releases] Found ${candidates.length} new releases from this week`);
+    return candidates;
+
+  } catch (error) {
+    console.error("[New Releases] Error fetching new releases:", error);
+    return candidates;
+  }
+}
+
+/**
+ * Build user's taste fingerprint from their listening history
+ * Returns: top artists, preferred vibes, genre weights
+ */
+export interface TasteFingerprint {
+  topArtists: Array<{ name: string; weight: number }>;
+  preferredVibes: {
+    energy: { min: number; max: number; avg: number };
+    tempo: { min: number; max: number; avg: number };
+    valence: { min: number; max: number; avg: number };
+    danceability: { min: number; max: number; avg: number };
+    acousticness: { min: number; max: number; avg: number };
+  };
+  genreWeights: Record<string, number>;
+  doNotServe: {
+    artists: string[];
+    trackIds: string[];
+  };
+}
+
+export function buildTasteFingerprint(
+  savedTracks: PairTrack[],
+  recentlyPlayed: PairTrack[],
+  dislikedTracks: PairTrack[] = []
+): TasteFingerprint {
+  // Combine saved (strong signal) and recently played (medium signal)
+  const allTracks = [
+    ...savedTracks.map(t => ({ ...t, weight: 1.0 })),
+    ...recentlyPlayed.map(t => ({ ...t, weight: 0.6 }))
+  ];
+
+  // Count artist occurrences with weights
+  const artistCounts: Record<string, number> = {};
+  for (const track of allTracks) {
+    const artist = track.artist_name.toLowerCase();
+    artistCounts[artist] = (artistCounts[artist] || 0) + (track as any).weight;
+  }
+
+  // Sort artists by weight
+  const topArtists = Object.entries(artistCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 20)
+    .map(([name, weight]) => ({ name, weight }));
+
+  // Calculate vibe ranges
+  const energies = allTracks.map(t => t.energy).filter(e => e !== undefined) as number[];
+  const tempos = allTracks.map(t => t.tempo).filter(t => t !== undefined) as number[];
+  const valences = allTracks.map(t => t.valence).filter(v => v !== undefined) as number[];
+  const danceabilities = allTracks.map(t => t.danceability).filter(d => d !== undefined) as number[];
+  const acousticnesses = allTracks.map(t => t.acousticness).filter(a => a !== undefined) as number[];
+
+  const calcRange = (arr: number[]) => ({
+    min: arr.length > 0 ? Math.min(...arr) : 0,
+    max: arr.length > 0 ? Math.max(...arr) : 1,
+    avg: arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0.5
+  });
+
+  // Count genre occurrences
+  const genreCounts: Record<string, number> = {};
+  for (const track of allTracks) {
+    for (const genre of track.genres || []) {
+      const normalizedGenre = genre.toLowerCase();
+      genreCounts[normalizedGenre] = (genreCounts[normalizedGenre] || 0) + (track as any).weight;
+    }
+  }
+
+  // Normalize genre weights
+  const maxGenreCount = Math.max(...Object.values(genreCounts), 1);
+  const genreWeights: Record<string, number> = {};
+  for (const [genre, count] of Object.entries(genreCounts)) {
+    genreWeights[genre] = count / maxGenreCount;
+  }
+
+  // Build do-not-serve list from disliked tracks
+  const doNotServe = {
+    artists: [...new Set(dislikedTracks.map(t => t.artist_name.toLowerCase()))],
+    trackIds: dislikedTracks.map(t => t.apple_music_id)
+  };
+
+  return {
+    topArtists,
+    preferredVibes: {
+      energy: calcRange(energies),
+      tempo: calcRange(tempos),
+      valence: calcRange(valences),
+      danceability: calcRange(danceabilities),
+      acousticness: calcRange(acousticnesses)
+    },
+    genreWeights,
+    doNotServe
+  };
+}
+
+/**
+ * Score a new release candidate against user's taste fingerprint
+ * Returns a score from 0-1 with breakdown
+ */
+export interface CandidateScore {
+  total: number;
+  artistProximity: number;
+  vibeMatch: number;
+  genreFit: number;
+  novelty: number;
+  reason: string;
+}
+
+export function scoreNewReleaseCandidate(
+  track: PairTrack,
+  fingerprint: TasteFingerprint
+): CandidateScore {
+  // 1. ARTIST PROXIMITY (0.35 weight)
+  // Same artist = 1.0, collaborator/similar = 0.5-0.8, unknown = 0.2
+  let artistProximity = 0.2; // Base score for unknown artists
+  const trackArtist = track.artist_name.toLowerCase();
+  
+  // Check if it's a top artist
+  const artistMatch = fingerprint.topArtists.find(a => 
+    trackArtist.includes(a.name) || a.name.includes(trackArtist)
+  );
+  if (artistMatch) {
+    artistProximity = 0.7 + (artistMatch.weight / fingerprint.topArtists[0]?.weight || 1) * 0.3;
+  }
+  
+  // Check for featuring/collaboration with top artists
+  for (const topArtist of fingerprint.topArtists.slice(0, 10)) {
+    if (trackArtist.includes(topArtist.name) || 
+        track.track_name.toLowerCase().includes(topArtist.name)) {
+      artistProximity = Math.max(artistProximity, 0.6);
+    }
+  }
+
+  // 2. VIBE MATCH (0.30 weight)
+  // How well does the track's audio features match user's preferred ranges
+  let vibeMatch = 0.5; // Default
+  let vibeFactors = 0;
+  
+  const vibes = fingerprint.preferredVibes;
+  
+  if (track.energy !== undefined) {
+    const energyDist = Math.abs(track.energy - vibes.energy.avg);
+    const energyRange = vibes.energy.max - vibes.energy.min || 0.5;
+    vibeMatch += (1 - energyDist / energyRange) * 0.25;
+    vibeFactors++;
+  }
+  
+  if (track.tempo !== undefined) {
+    const tempoDist = Math.abs(track.tempo - vibes.tempo.avg);
+    const tempoRange = vibes.tempo.max - vibes.tempo.min || 50;
+    vibeMatch += (1 - Math.min(tempoDist / tempoRange, 1)) * 0.2;
+    vibeFactors++;
+  }
+  
+  if (track.valence !== undefined) {
+    const valenceDist = Math.abs(track.valence - vibes.valence.avg);
+    const valenceRange = vibes.valence.max - vibes.valence.min || 0.5;
+    vibeMatch += (1 - valenceDist / valenceRange) * 0.2;
+    vibeFactors++;
+  }
+  
+  if (track.danceability !== undefined) {
+    const danceDist = Math.abs(track.danceability - vibes.danceability.avg);
+    const danceRange = vibes.danceability.max - vibes.danceability.min || 0.5;
+    vibeMatch += (1 - danceDist / danceRange) * 0.2;
+    vibeFactors++;
+  }
+  
+  if (vibeFactors > 0) {
+    vibeMatch = Math.min(vibeMatch, 1);
+  }
+
+  // 3. GENRE FIT (0.20 weight)
+  // How well do the track's genres match user's preferred genres
+  let genreFit = 0.3; // Base score
+  const trackGenres = (track.genres || []).map(g => g.toLowerCase());
+  
+  for (const genre of trackGenres) {
+    // Check for exact or partial genre matches
+    for (const [userGenre, weight] of Object.entries(fingerprint.genreWeights)) {
+      if (genre.includes(userGenre) || userGenre.includes(genre)) {
+        genreFit = Math.max(genreFit, 0.3 + weight * 0.7);
+      }
+    }
+  }
+
+  // 4. NOVELTY SCORE (0.15 weight)
+  // Penalize ultra-mainstream unless user loves mainstream
+  // Boost genuinely new/emerging artists
+  let novelty = 0.5;
+  
+  // If artist is in top 3, slightly lower novelty (they already know this artist)
+  if (fingerprint.topArtists.slice(0, 3).some(a => trackArtist.includes(a.name))) {
+    novelty = 0.4; // Still good, but not "discovery"
+  }
+  
+  // If artist is completely unknown, boost novelty
+  if (!artistMatch && artistProximity <= 0.3) {
+    novelty = 0.7; // True discovery potential
+  }
+
+  // Calculate total score with weights
+  const total = 
+    artistProximity * 0.35 +
+    vibeMatch * 0.30 +
+    genreFit * 0.20 +
+    novelty * 0.15;
+
+  // Generate explanation
+  let reason = '';
+  const maxScore = Math.max(artistProximity, vibeMatch, genreFit, novelty);
+  
+  if (artistProximity === maxScore && artistProximity > 0.5) {
+    if (artistMatch) {
+      reason = `New release from ${track.artist_name}, one of your favorites`;
+    } else {
+      reason = `Features artists in your rotation`;
+    }
+  } else if (vibeMatch === maxScore && vibeMatch > 0.5) {
+    reason = `Matches your preferred sound profile`;
+  } else if (genreFit === maxScore && genreFit > 0.5) {
+    const matchedGenre = trackGenres[0] || 'your taste';
+    reason = `Fresh ${matchedGenre} that fits your style`;
+  } else if (novelty === maxScore) {
+    reason = `Discovery pick - new artist worth checking out`;
+  } else {
+    reason = `Curated for your taste profile`;
+  }
+
+  return {
+    total,
+    artistProximity,
+    vibeMatch,
+    genreFit,
+    novelty,
+    reason
+  };
+}
+
 export { mockAppleMusicTracks };

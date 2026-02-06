@@ -1,9 +1,19 @@
-// Pair Curator Engine v1
+// Pair Curator Engine v2
 // "Pair is not a recommender feed. It's a high-precision curator."
-// Weekly drops by genre with confidence-gated recommendations
+// NEW RELEASES FIRST → Score by taste → Assign to genres for display
+// Core principle: Only show music released THIS WEEK
 
 import { supabase } from "./supabase";
-import { PairTrack, searchAppleMusicTracks, getAppleMusicTrack } from "./appleMusic";
+import { 
+  PairTrack, 
+  searchAppleMusicTracks, 
+  getAppleMusicTrack,
+  getAppleMusicNewReleases,
+  buildTasteFingerprint,
+  scoreNewReleaseCandidate,
+  TasteFingerprint,
+  CandidateScore
+} from "./appleMusic";
 
 // ============================================================================
 // TYPES & INTERFACES
@@ -66,19 +76,97 @@ export interface UserTasteProfile {
 // CONSTANTS
 // ============================================================================
 
-const DEFAULT_CONFIDENCE_THRESHOLD = 0.84;
-const STRICT_CONFIDENCE_THRESHOLD = 0.90; // For users with little data
-const ADVENTURE_CONFIDENCE_THRESHOLD = 0.78;
-const MAX_TRACKS_PER_GENRE = 5;
+// V2: Lower thresholds since we're starting with new releases (smaller pool)
+const DEFAULT_CONFIDENCE_THRESHOLD = 0.55; // Lower for new releases
+const STRICT_CONFIDENCE_THRESHOLD = 0.65; // For users with little data
+const ADVENTURE_CONFIDENCE_THRESHOLD = 0.45;
 
-// Scoring weights
+// V2: Total tracks for the week (not per genre)
+const MAX_WEEKLY_TRACKS = 6;
+const MIN_WEEKLY_TRACKS = 3;
+
+// Legacy scoring weights (kept for backward compatibility)
 const WEIGHTS = {
   audio: 0.45,
   text: 0.30,
   scene: 0.25
 };
 
-// Genre family mappings for scene similarity
+// ============================================================================
+// BROAD GENRES (8-12 max) - Used for display, not discovery
+// Discovery happens first, then we assign to these genres
+// ============================================================================
+
+export interface BroadGenre {
+  slug: string;
+  display_name: string;
+  keywords: string[];  // Used to match track genres to this broad genre
+}
+
+const BROAD_GENRES: BroadGenre[] = [
+  {
+    slug: 'electronic',
+    display_name: 'Electronic',
+    keywords: ['electronic', 'edm', 'dance', 'house', 'techno', 'trance', 'melodic', 'progressive', 'deep house', 'tech house', 'minimal', 'ambient', 'electronica', 'synth']
+  },
+  {
+    slug: 'indie-alternative',
+    display_name: 'Indie / Alternative',
+    keywords: ['indie', 'alternative', 'indie rock', 'indie pop', 'indie folk', 'indie dance', 'alt']
+  },
+  {
+    slug: 'rnb-soul',
+    display_name: 'R&B / Soul',
+    keywords: ['r&b', 'rnb', 'soul', 'neo soul', 'alternative r&b', 'contemporary r&b', 'rhythm and blues']
+  },
+  {
+    slug: 'hip-hop',
+    display_name: 'Hip-Hop',
+    keywords: ['hip-hop', 'hip hop', 'rap', 'trap', 'drill', 'hiphop']
+  },
+  {
+    slug: 'pop',
+    display_name: 'Pop',
+    keywords: ['pop', 'synth pop', 'electropop', 'art pop', 'dream pop', 'dance pop']
+  },
+  {
+    slug: 'rock',
+    display_name: 'Rock',
+    keywords: ['rock', 'post-rock', 'shoegaze', 'alternative rock', 'hard rock', 'punk', 'metal']
+  },
+  {
+    slug: 'ambient-experimental',
+    display_name: 'Ambient / Experimental',
+    keywords: ['ambient', 'experimental', 'avant-garde', 'noise', 'drone', 'soundscape']
+  },
+  {
+    slug: 'folk-singer-songwriter',
+    display_name: 'Folk / Singer-Songwriter',
+    keywords: ['folk', 'indie folk', 'americana', 'singer-songwriter', 'acoustic', 'country']
+  },
+  {
+    slug: 'jazz',
+    display_name: 'Jazz',
+    keywords: ['jazz', 'jazz fusion', 'nu jazz', 'contemporary jazz', 'bebop', 'smooth jazz']
+  },
+  {
+    slug: 'classical',
+    display_name: 'Classical',
+    keywords: ['classical', 'orchestral', 'chamber', 'opera', 'symphony', 'piano']
+  },
+  {
+    slug: 'latin',
+    display_name: 'Latin',
+    keywords: ['latin', 'reggaeton', 'salsa', 'bachata', 'cumbia', 'latin pop', 'spanish']
+  },
+  {
+    slug: 'global',
+    display_name: 'Global',
+    keywords: ['world', 'afrobeat', 'afropop', 'k-pop', 'j-pop', 'bollywood', 'african']
+  }
+];
+
+// Legacy genre family mappings (kept for backward compatibility)
 const GENRE_FAMILIES: Record<string, string[]> = {
   electronic: ['electronic', 'edm', 'dance', 'house', 'techno', 'trance', 'melodic', 'progressive', 'deep house', 'tech house', 'minimal', 'ambient'],
   indie: ['indie', 'alternative', 'indie rock', 'indie pop', 'indie folk', 'indie dance'],
@@ -568,12 +656,21 @@ async function getConfidenceThreshold(userId: string): Promise<number> {
 }
 
 /**
- * Generate weekly drop for a user
+ * Generate weekly drop for a user - V2 NEW RELEASES FIRST APPROACH
+ * 
+ * Flow:
+ * 1. Fetch NEW RELEASES from Apple Music (this week only)
+ * 2. Build user taste fingerprint from saved + recently played
+ * 3. Exclude: already in library, disliked, previously shown
+ * 4. Score each candidate: artist proximity, vibe match, genre fit, novelty
+ * 5. Select 3-6 total tracks (high conviction only)
+ * 6. Assign to broad genres for display
  */
 export async function generateWeeklyDrop(userId: string): Promise<WeeklyDrop | null> {
   const weekStartDate = getWeekFriday();
   
-  console.log(`[Curator] Generating weekly drop for user ${userId}, week ${weekStartDate}`);
+  console.log(`[Curator V2] Generating weekly drop for user ${userId}, week ${weekStartDate}`);
+  console.log(`[Curator V2] NEW RELEASES FIRST approach - only showing this week's music`);
   
   // Check if drop already exists
   const { data: existingDrop } = await supabase
@@ -584,7 +681,7 @@ export async function generateWeeklyDrop(userId: string): Promise<WeeklyDrop | n
     .single();
   
   if (existingDrop && existingDrop.status === 'generated') {
-    console.log(`[Curator] Drop already exists for this week`);
+    console.log(`[Curator V2] Drop already exists for this week`);
     return existingDrop as WeeklyDrop;
   }
   
@@ -602,85 +699,269 @@ export async function generateWeeklyDrop(userId: string): Promise<WeeklyDrop | n
     .single();
   
   if (dropError || !drop) {
-    console.error(`[Curator] Error creating drop:`, dropError);
+    console.error(`[Curator V2] Error creating drop:`, dropError);
     return null;
   }
   
   try {
-    // Get user's active genres
-    const { data: genres } = await supabase
-      .from('curated_genres')
-      .select('*')
-      .eq('is_active', true)
-      .order('sort_order');
+    // ========================================================================
+    // STEP 1: FETCH NEW RELEASES (this week only)
+    // ========================================================================
+    console.log(`[Curator V2] Step 1: Fetching new releases from Apple Music...`);
+    const newReleases = await getAppleMusicNewReleases(150);
+    console.log(`[Curator V2] Found ${newReleases.length} new releases this week`);
     
-    if (!genres || genres.length === 0) {
-      console.error(`[Curator] No active genres found`);
-      await updateDropStatus(drop.id, 'failed');
-      return null;
+    if (newReleases.length === 0) {
+      console.log(`[Curator V2] No new releases found - marking as empty`);
+      await updateDropStatus(drop.id, 'empty');
+      return { ...drop, status: 'empty', total_tracks: 0 } as WeeklyDrop;
     }
     
-    // Get user taste and exclusions
-    const userTaste = await getUserTasteProfile(userId);
+    // ========================================================================
+    // STEP 2: BUILD USER TASTE FINGERPRINT
+    // ========================================================================
+    console.log(`[Curator V2] Step 2: Building user taste fingerprint...`);
+    
+    // Get user's saved tracks (strong signal)
+    const { data: savedTracks } = await supabase
+      .from('user_owned_tracks')
+      .select('apple_music_id, track_name, artist_name, genres, energy, valence, danceability, acousticness, tempo')
+      .eq('user_id', userId)
+      .limit(100);
+    
+    // Get user's recently played (medium signal) - from taste vector or interactions
+    const { data: recentInteractions } = await supabase
+      .from('pairing_interactions')
+      .select(`
+        pair_tracks(apple_music_id, track_name, artist_name, genres, energy, valence, danceability, acousticness, tempo)
+      `)
+      .eq('user_id', userId)
+      .in('interaction_type', ['played', 'liked', 'saved'])
+      .order('created_at', { ascending: false })
+      .limit(50);
+    
+    // Get disliked tracks
+    const { data: dislikedTracks } = await supabase
+      .from('user_disliked_tracks')
+      .select('apple_music_id')
+      .eq('user_id', userId);
+    
+    // Convert to PairTrack format
+    const savedPairTracks: PairTrack[] = (savedTracks || []).map(t => ({
+      apple_music_id: t.apple_music_id,
+      track_name: t.track_name || '',
+      artist_name: t.artist_name || '',
+      genres: t.genres,
+      energy: t.energy,
+      valence: t.valence,
+      danceability: t.danceability,
+      acousticness: t.acousticness,
+      tempo: t.tempo
+    }));
+    
+    const recentPairTracks: PairTrack[] = (recentInteractions || [])
+      .filter(i => i.pair_tracks)
+      .map(i => {
+        const t = i.pair_tracks as any;
+        return {
+          apple_music_id: t.apple_music_id,
+          track_name: t.track_name || '',
+          artist_name: t.artist_name || '',
+          genres: t.genres,
+          energy: t.energy,
+          valence: t.valence,
+          danceability: t.danceability,
+          acousticness: t.acousticness,
+          tempo: t.tempo
+        };
+      });
+    
+    const dislikedPairTracks: PairTrack[] = (dislikedTracks || []).map(t => ({
+      apple_music_id: t.apple_music_id,
+      track_name: '',
+      artist_name: ''
+    }));
+    
+    // Build fingerprint
+    const fingerprint = buildTasteFingerprint(savedPairTracks, recentPairTracks, dislikedPairTracks);
+    console.log(`[Curator V2] Fingerprint built: ${fingerprint.topArtists.length} top artists, ${Object.keys(fingerprint.genreWeights).length} genre weights`);
+    
+    // ========================================================================
+    // STEP 3: EXCLUDE TRACKS
+    // ========================================================================
+    console.log(`[Curator V2] Step 3: Filtering exclusions...`);
     const exclusions = await getExclusionSets(userId);
+    
+    // Also exclude disliked artists
+    const dislikedArtists = new Set(fingerprint.doNotServe.artists);
+    
+    const filteredCandidates = newReleases.filter(track => {
+      // Exclude if already owned
+      if (exclusions.has(track.apple_music_id)) return false;
+      
+      // Exclude if from disliked artist
+      if (dislikedArtists.has(track.artist_name.toLowerCase())) return false;
+      
+      // Exclude if in do-not-serve list
+      if (fingerprint.doNotServe.trackIds.includes(track.apple_music_id)) return false;
+      
+      return true;
+    });
+    
+    console.log(`[Curator V2] ${filteredCandidates.length} candidates after exclusions`);
+    
+    // ========================================================================
+    // STEP 4: SCORE CANDIDATES
+    // ========================================================================
+    console.log(`[Curator V2] Step 4: Scoring candidates against taste fingerprint...`);
     const threshold = await getConfidenceThreshold(userId);
     
-    console.log(`[Curator] Confidence threshold: ${threshold}`);
+    const scoredCandidates: Array<{ track: PairTrack; score: CandidateScore }> = [];
+    
+    for (const track of filteredCandidates) {
+      const score = scoreNewReleaseCandidate(track, fingerprint);
+      
+      if (score.total >= threshold) {
+        scoredCandidates.push({ track, score });
+      }
+    }
+    
+    // Sort by total score descending
+    scoredCandidates.sort((a, b) => b.score.total - a.score.total);
+    
+    console.log(`[Curator V2] ${scoredCandidates.length} candidates passed threshold (${threshold})`);
+    
+    // ========================================================================
+    // STEP 5: SELECT TOP 3-6 TRACKS
+    // ========================================================================
+    console.log(`[Curator V2] Step 5: Selecting top ${MIN_WEEKLY_TRACKS}-${MAX_WEEKLY_TRACKS} tracks...`);
+    
+    // Ensure artist diversity - max 2 tracks per artist
+    const selectedTracks: Array<{ track: PairTrack; score: CandidateScore }> = [];
+    const artistCounts: Record<string, number> = {};
+    
+    for (const candidate of scoredCandidates) {
+      if (selectedTracks.length >= MAX_WEEKLY_TRACKS) break;
+      
+      const artist = candidate.track.artist_name.toLowerCase();
+      const currentCount = artistCounts[artist] || 0;
+      
+      if (currentCount < 2) {
+        selectedTracks.push(candidate);
+        artistCounts[artist] = currentCount + 1;
+      }
+    }
+    
+    console.log(`[Curator V2] Selected ${selectedTracks.length} tracks for the week`);
+    
+    if (selectedTracks.length < MIN_WEEKLY_TRACKS) {
+      console.log(`[Curator V2] Not enough high-conviction tracks - marking as empty`);
+      await updateDropStatus(drop.id, 'empty');
+      return { ...drop, status: 'empty', total_tracks: 0 } as WeeklyDrop;
+    }
+    
+    // ========================================================================
+    // STEP 6: ASSIGN TO BROAD GENRES FOR DISPLAY
+    // ========================================================================
+    console.log(`[Curator V2] Step 6: Assigning tracks to broad genres...`);
     
     let totalTracks = 0;
     
-    // Process each genre
-    for (const genre of genres) {
-      console.log(`[Curator] Processing genre: ${genre.display_name}`);
+    for (let i = 0; i < selectedTracks.length; i++) {
+      const { track, score } = selectedTracks[i];
       
-      // Retrieve candidates
-      const candidates = await retrieveWeeklyCandidates(genre as CuratedGenre, weekStartDate);
+      // Determine broad genre for this track
+      const broadGenre = assignToBroadGenre(track);
       
-      // Filter excluded tracks
-      const filteredCandidates = candidates.filter(c => !exclusions.has(c.apple_music_id));
+      // Store track in pair_tracks if not exists
+      let trackId: string;
       
-      // Score candidates
-      const scored = filteredCandidates.map(track => 
-        scoreCandidate(track, userTaste, genre.search_keywords || [])
-      );
+      const { data: existingTrack } = await supabase
+        .from('pair_tracks')
+        .select('id')
+        .eq('apple_music_id', track.apple_music_id)
+        .single();
       
-      // Sort by confidence and filter by threshold
-      const qualified = scored
-        .filter(s => s.confidence >= threshold)
-        .sort((a, b) => b.confidence - a.confidence)
-        .slice(0, MAX_TRACKS_PER_GENRE);
-      
-      console.log(`[Curator] ${genre.display_name}: ${qualified.length} tracks passed threshold`);
-      
-      // Store qualified tracks
-      for (let i = 0; i < qualified.length; i++) {
-        const scored = qualified[i];
-        
-        // Get track_id from pair_tracks
-        const { data: pairTrack } = await supabase
+      if (existingTrack) {
+        trackId = existingTrack.id;
+      } else {
+        const { data: newTrack, error } = await supabase
           .from('pair_tracks')
+          .insert({
+            apple_music_id: track.apple_music_id,
+            track_name: track.track_name,
+            artist_name: track.artist_name,
+            album_name: track.album_name,
+            album_art_url: track.album_art_url,
+            preview_url: track.preview_url,
+            duration_ms: track.duration_ms,
+            release_date: track.release_date,
+            genres: track.genres,
+            energy: track.energy,
+            valence: track.valence,
+            danceability: track.danceability,
+            acousticness: track.acousticness,
+            instrumentalness: track.instrumentalness,
+            tempo: track.tempo
+          })
           .select('id')
-          .eq('apple_music_id', scored.track.apple_music_id)
           .single();
         
-        if (!pairTrack) continue;
-        
-        await supabase
-          .from('weekly_drop_tracks')
-          .insert({
-            weekly_drop_id: drop.id,
-            genre_id: genre.id,
-            track_id: pairTrack.id,
-            position: i + 1,
-            confidence: scored.confidence,
-            audio_sim: scored.audio_sim,
-            text_sim: scored.text_sim,
-            scene_sim: scored.scene_sim,
-            reason: scored.reason
-          });
-        
-        totalTracks++;
+        if (error || !newTrack) {
+          console.error(`[Curator V2] Error inserting track:`, error);
+          continue;
+        }
+        trackId = newTrack.id;
       }
+      
+      // Get or create genre record for this broad genre
+      let genreId: string;
+      const { data: existingGenre } = await supabase
+        .from('curated_genres')
+        .select('id')
+        .eq('slug', broadGenre.slug)
+        .single();
+      
+      if (existingGenre) {
+        genreId = existingGenre.id;
+      } else {
+        // Create the broad genre
+        const { data: newGenre, error: genreError } = await supabase
+          .from('curated_genres')
+          .insert({
+            slug: broadGenre.slug,
+            display_name: broadGenre.display_name,
+            search_keywords: broadGenre.keywords,
+            is_active: true,
+            sort_order: BROAD_GENRES.findIndex(g => g.slug === broadGenre.slug)
+          })
+          .select('id')
+          .single();
+        
+        if (genreError || !newGenre) {
+          console.error(`[Curator V2] Error creating genre:`, genreError);
+          continue;
+        }
+        genreId = newGenre.id;
+      }
+      
+      // Insert into weekly_drop_tracks
+      await supabase
+        .from('weekly_drop_tracks')
+        .insert({
+          weekly_drop_id: drop.id,
+          genre_id: genreId,
+          track_id: trackId,
+          position: i + 1,
+          confidence: score.total,
+          audio_sim: score.vibeMatch,
+          text_sim: score.genreFit,
+          scene_sim: score.artistProximity,
+          reason: score.reason
+        });
+      
+      totalTracks++;
+      console.log(`[Curator V2] Added: "${track.track_name}" by ${track.artist_name} → ${broadGenre.display_name} (score: ${score.total.toFixed(2)})`);
     }
     
     // Update drop status
@@ -693,7 +974,7 @@ export async function generateWeeklyDrop(userId: string): Promise<WeeklyDrop | n
       })
       .eq('id', drop.id);
     
-    console.log(`[Curator] Weekly drop complete: ${totalTracks} tracks`);
+    console.log(`[Curator V2] Weekly drop complete: ${totalTracks} tracks`);
     
     return {
       ...drop,
@@ -702,10 +983,40 @@ export async function generateWeeklyDrop(userId: string): Promise<WeeklyDrop | n
     } as WeeklyDrop;
     
   } catch (error) {
-    console.error(`[Curator] Error generating drop:`, error);
+    console.error(`[Curator V2] Error generating drop:`, error);
     await updateDropStatus(drop.id, 'failed');
     return null;
   }
+}
+
+/**
+ * Assign a track to a broad genre based on its genre tags
+ */
+function assignToBroadGenre(track: PairTrack): BroadGenre {
+  const trackGenres = (track.genres || []).map(g => g.toLowerCase());
+  
+  // Score each broad genre
+  let bestMatch: BroadGenre = BROAD_GENRES[4]; // Default to Pop
+  let bestScore = 0;
+  
+  for (const broadGenre of BROAD_GENRES) {
+    let score = 0;
+    
+    for (const trackGenre of trackGenres) {
+      for (const keyword of broadGenre.keywords) {
+        if (trackGenre.includes(keyword) || keyword.includes(trackGenre)) {
+          score += 1;
+        }
+      }
+    }
+    
+    if (score > bestScore) {
+      bestScore = score;
+      bestMatch = broadGenre;
+    }
+  }
+  
+  return bestMatch;
 }
 
 async function updateDropStatus(dropId: string, status: string): Promise<void> {
