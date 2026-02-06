@@ -975,23 +975,24 @@ export async function getAppleMusicNewReleases(limit: number = 100): Promise<Pai
   const weekStart = getWeekStartDate();
   const weekStartStr = weekStart.toISOString().split('T')[0];
   
-  console.log(`[New Releases] Fetching releases from ${weekStartStr} onwards`);
+  console.log(`[New Releases] Fetching releases from ${weekStartStr} onwards (THIS WEEK ONLY)`);
 
-  // For new releases, we're more lenient - accept tracks without release date
-  // or tracks released in the last 30 days (to ensure we have content)
-  const thirtyDaysAgo = new Date();
-  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-
+  // STRICT: Only accept tracks released THIS WEEK (since last Friday)
+  // This is the core Pair principle - only show new music
   const addCandidate = (track: PairTrack): boolean => {
     if (seenIds.has(track.apple_music_id)) return false;
     
-    // Accept tracks without release date (we'll show them anyway)
-    // Or tracks released in the last 30 days
+    // STRICT DATE CHECK: Only accept tracks released this week
     if (track.release_date) {
       const releaseDate = new Date(track.release_date);
-      if (releaseDate < thirtyDaysAgo) {
-        return false; // Too old
+      if (releaseDate < weekStart) {
+        // Track is older than this week's Friday - reject it
+        return false;
       }
+    } else {
+      // No release date - skip it to be safe
+      // We can't verify it's from this week
+      return false;
     }
     
     candidates.push(track);
