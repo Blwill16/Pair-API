@@ -941,18 +941,11 @@ function getWeekStartDate(): Date {
   const now = new Date();
   // Convert to New York timezone
   const nyTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
-  const dayOfWeek = nyTime.getDay(); // 0 = Sunday, 4 = Thursday, 5 = Friday
+  const dayOfWeek = nyTime.getDay(); // 0 = Sunday, 5 = Friday, 6 = Saturday
   
-  // Calculate days since last Thursday
-  // If today is Thursday and before midnight, use last Thursday
-  let daysToSubtract = (dayOfWeek - 4 + 7) % 7;
-  if (daysToSubtract === 0) {
-    // It's Thursday - check if we should use this Thursday or last
-    const hour = nyTime.getHours();
-    if (hour < 22) { // Before 10pm Thursday (midnight ET equivalent for Phoenix)
-      daysToSubtract = 7;
-    }
-  }
+  // Calculate days since last Friday (dayOfWeek 5)
+  // If today is Friday, use today
+  let daysToSubtract = (dayOfWeek - 5 + 7) % 7;
   
   const weekStart = new Date(nyTime);
   weekStart.setDate(nyTime.getDate() - daysToSubtract);
