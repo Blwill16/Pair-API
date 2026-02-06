@@ -854,10 +854,41 @@ export async function generateWeeklyDrop(userId: string): Promise<WeeklyDrop | n
     
     console.log(`[Curator V2] Selected ${selectedTracks.length} tracks for the week`);
     
+    // FALLBACK FOR NEW USERS: If not enough high-conviction tracks, use chart tracks
     if (selectedTracks.length < MIN_WEEKLY_TRACKS) {
-      console.log(`[Curator V2] Not enough high-conviction tracks - marking as empty`);
-      await updateDropStatus(drop.id, 'empty');
-      return { ...drop, status: 'empty', total_tracks: 0 } as WeeklyDrop;
+      console.log(`[Curator V2] Not enough high-conviction tracks (${selectedTracks.length}/${MIN_WEEKLY_TRACKS})`);
+      console.log(`[Curator V2] Falling back to chart/popular tracks for new user experience`);
+      
+      // Use the first N tracks from new releases (which includes chart tracks)
+      // These are already sorted by popularity/relevance from Apple Music
+      const fallbackTracks = filteredCandidates.slice(0, MAX_WEEKLY_TRACKS);
+      
+      for (const track of fallbackTracks) {
+        // Check if already selected
+        if (!selectedTracks.some(s => s.track.apple_music_id === track.apple_music_id)) {
+          selectedTracks.push({
+            track,
+            score: {
+              total: 0.5, // Default score for fallback tracks
+              artistProximity: 0.3,
+              vibeMatch: 0.5,
+              genreFit: 0.5,
+              novelty: 0.7,
+              reason: 'Popular new release this week'
+            }
+          });
+        }
+        if (selectedTracks.length >= MAX_WEEKLY_TRACKS) break;
+      }
+      
+      console.log(`[Curator V2] After fallback: ${selectedTracks.length} tracks`);
+      
+      // If still not enough, mark as empty
+      if (selectedTracks.length < MIN_WEEKLY_TRACKS) {
+        console.log(`[Curator V2] Still not enough tracks after fallback - marking as empty`);
+        await updateDropStatus(drop.id, 'empty');
+        return { ...drop, status: 'empty', total_tracks: 0 } as WeeklyDrop;
+      }
     }
     
     // ========================================================================
