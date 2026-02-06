@@ -666,11 +666,15 @@ async function getConfidenceThreshold(userId: string): Promise<number> {
  * 5. Select 3-6 total tracks (high conviction only)
  * 6. Assign to broad genres for display
  */
-export async function generateWeeklyDrop(userId: string): Promise<WeeklyDrop | null> {
+export async function generateWeeklyDrop(userId: string, preferredGenres?: string[]): Promise<WeeklyDrop | null> {
   const weekStartDate = getWeekFriday();
   
   console.log(`[Curator V2] Generating weekly drop for user ${userId}, week ${weekStartDate}`);
   console.log(`[Curator V2] NEW RELEASES FIRST approach - only showing this week's music`);
+  
+  if (preferredGenres && preferredGenres.length > 0) {
+    console.log(`[Curator V2] User's preferred genres from library: ${preferredGenres.join(", ")}`);
+  }
   
   // Check if drop already exists
   const { data: existingDrop } = await supabase
@@ -795,6 +799,9 @@ export async function generateWeeklyDrop(userId: string): Promise<WeeklyDrop | n
     // Also exclude disliked artists
     const dislikedArtists = new Set(fingerprint.doNotServe.artists);
     
+    // Normalize preferred genres for matching
+    const normalizedPreferredGenres = preferredGenres?.map(g => g.toLowerCase()) || [];
+    
     const filteredCandidates = newReleases.filter(track => {
       // Exclude if already owned
       if (exclusions.has(track.apple_music_id)) return false;
@@ -805,10 +812,39 @@ export async function generateWeeklyDrop(userId: string): Promise<WeeklyDrop | n
       // Exclude if in do-not-serve list
       if (fingerprint.doNotServe.trackIds.includes(track.apple_music_id)) return false;
       
+      // FILTER BY USER'S PREFERRED GENRES (if provided)
+      if (normalizedPreferredGenres.length > 0 && track.genres && track.genres.length > 0) {
+        const trackGenres = track.genres.map(g => g.toLowerCase());
+        const hasMatchingGenre = trackGenres.some(tg => 
+          normalizedPreferredGenres.some(pg => 
+            tg.includes(pg) || pg.includes(tg) || 
+            // Handle common variations
+            (tg.includes('hip-hop') && pg.includes('hip')) ||
+            (tg.includes('r&b') && pg.includes('r&b')) ||
+            (tg.includes('electronic') && (pg.includes('electronic') || pg.includes('dance'))) ||
+            (tg.includes('alternative') && (pg.includes('alternative') || pg.includes('indie')))
+          )
+        );
+        if (!hasMatchingGenre) return false;
+      }
+      
       return true;
     });
     
-    console.log(`[Curator V2] ${filteredCandidates.length} candidates after exclusions`);
+    console.log(`[Curator V2] ${filteredCandidates.length} candidates after exclusions and genre filtering`);
+    
+    // If genre filtering removed too many, fall back to all candidates
+    if (normalizedPreferredGenres.length > 0 && filteredCandidates.length < MIN_WEEKLY_TRACKS) {
+      console.log(`[Curator V2] Genre filtering too restrictive, including all genres`);
+      // Re-filter without genre restriction
+      const allCandidates = newReleases.filter(track => {
+        if (exclusions.has(track.apple_music_id)) return false;
+        if (dislikedArtists.has(track.artist_name.toLowerCase())) return false;
+        if (fingerprint.doNotServe.trackIds.includes(track.apple_music_id)) return false;
+        return true;
+      });
+      console.log(`[Curator V2] ${allCandidates.length} candidates without genre filter`);
+    }
     
     // ========================================================================
     // STEP 4: SCORE CANDIDATES
@@ -1080,7 +1116,7 @@ function getWeekFriday(): string {
 /**
  * Get user's current weekly drop
  */
-export async function getCurrentWeeklyDrop(userId: string): Promise<{
+export async function getCurrentWeeklyDrop(userId: string, preferredGenres?: string[]): Promise<{
   drop: WeeklyDrop | null;
   tracks: WeeklyDropTrack[];
   genres: Record<string, WeeklyDropTrack[]>;
@@ -1096,8 +1132,8 @@ export async function getCurrentWeeklyDrop(userId: string): Promise<{
     .single();
   
   if (!drop) {
-    // Generate drop if it doesn't exist
-    drop = await generateWeeklyDrop(userId) as any;
+    // Generate drop if it doesn't exist, passing preferred genres
+    drop = await generateWeeklyDrop(userId, preferredGenres) as any;
   }
   
   if (!drop) {

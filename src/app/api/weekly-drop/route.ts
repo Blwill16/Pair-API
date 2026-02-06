@@ -16,7 +16,16 @@ export async function GET(request: NextRequest) {
       );
     }
     
-    const { drop, tracks, genres } = await getCurrentWeeklyDrop(userId);
+    // Get preferred genres from query params (sent by iOS from user's library)
+    const { searchParams } = new URL(request.url);
+    const genresParam = searchParams.get("genres");
+    const preferredGenres = genresParam ? genresParam.split(",").map(g => g.trim()) : undefined;
+    
+    if (preferredGenres && preferredGenres.length > 0) {
+      console.log(`[Weekly Drop API] User's preferred genres: ${preferredGenres.join(", ")}`);
+    }
+    
+    const { drop, tracks, genres } = await getCurrentWeeklyDrop(userId, preferredGenres);
     
     if (!drop) {
       return NextResponse.json({
