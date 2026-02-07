@@ -129,14 +129,31 @@ function normalizeGenres(genres?: string[]): string[] {
   return (genres || []).map((g) => g.toLowerCase().trim()).filter(Boolean);
 }
 
+function canonicalGenreToken(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/&/g, "and")
+    .replace(/[\/_-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function getArtistKey(track: PairTrack): string {
-  return (track.artist_name || "").toLowerCase().trim();
+  return (track.artist_name || "")
+    .toLowerCase()
+    .replace(/\s+(feat\.|featuring|ft\.).*$/i, "")
+    .replace(/\s+x\s+.*$/i, "")
+    .replace(/[|,;].*$/, "")
+    .trim();
 }
 
 function matchesGenreKeyword(trackGenre: string, preferredGenre: string): boolean {
+  const a = canonicalGenreToken(trackGenre);
+  const b = canonicalGenreToken(preferredGenre);
+  if (!a || !b) return false;
   return (
-    trackGenre.includes(preferredGenre) ||
-    preferredGenre.includes(trackGenre)
+    a.includes(b) ||
+    b.includes(a)
   );
 }
 
