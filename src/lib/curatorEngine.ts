@@ -966,11 +966,14 @@ export async function generateWeeklyDrop(userId: string, preferredGenres?: strin
       console.log(`[Curator V2] After fallback: ${selectedTracks.length} tracks`);
       
       // If still not enough, mark as empty
-      if (selectedTracks.length < MIN_WEEKLY_TRACKS) {
-        console.log(`[Curator V2] Still not enough tracks after fallback - marking as empty`);
-        await updateDropStatus(drop.id, 'empty');
-        return { ...drop, status: 'empty', total_tracks: 0 } as WeeklyDrop;
-      }
+      // Pair rule: fewer tracks is acceptable if confidence/diversity is limited.
+if (selectedTracks.length < MIN_WEEKLY_TRACKS) {
+  console.log(`[Curator V2] Returning fewer tracks this week: ${selectedTracks.length}`);
+}
+if (selectedTracks.length === 0) {
+  await updateDropStatus(drop.id, 'empty');
+  return { ...drop, status: 'empty', total_tracks: 0 } as WeeklyDrop;
+}
     }
     
     // ========================================================================
