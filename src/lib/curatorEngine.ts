@@ -34,8 +34,8 @@ export interface WeeklyDropTrack {
   genre?: CuratedGenre;
 }
 
-const MIN_TRACKS_PER_GENRE = 3;
-const MAX_TRACKS_PER_GENRE = 4;
+const MIN_TRACKS_PER_GENRE = 5;
+const MAX_TRACKS_PER_GENRE = 5;
 const MAX_TRACKS_PER_ARTIST_PER_GENRE = 1;
 const MAX_TRACKS_PER_ARTIST_GLOBAL = 1;
 
@@ -415,13 +415,12 @@ function selectTracksByGenre(
 
   const preferredSlugs = getPreferredBroadGenreSlugs(preferredGenres);
 
-  let targetSlugs = preferredSlugs.filter((slug) => (grouped[slug] || []).length > 0);
+  let targetSlugs = preferredSlugs;
 
   if (targetSlugs.length === 0) {
     targetSlugs = Object.entries(grouped)
       .filter(([slug]) => slug !== "other")
       .sort((a, b) => b[1].length - a[1].length)
-      .slice(0, 3)
       .map(([slug]) => slug);
   }
 
