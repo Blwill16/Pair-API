@@ -567,17 +567,22 @@ export async function generateWeeklyDrop(userId: string, preferredGenres?: strin
       const nextPosition = (positionByGenre[genreSlug] || 0) + 1;
       positionByGenre[genreSlug] = nextPosition;
 
-      const { error: insertError } = await supabase.from("weekly_drop_tracks").insert({
-        weekly_drop_id: drop.id,
-        genre_id: candidate.mappedGenre.id,
-        track_id: trackId,
-        position: nextPosition,
-        confidence: candidate.confidence,
-        audio_sim: candidate.confidence,
-        text_sim: candidate.confidence,
-        scene_sim: candidate.confidence,
-        reason: candidate.reason,
-      });
+      const { error: insertError } = await supabase
+        .from("weekly_drop_tracks")
+        .upsert(
+          {
+            weekly_drop_id: drop.id,
+            genre_id: candidate.mappedGenre.id,
+            track_id: trackId,
+            position: nextPosition,
+            confidence: candidate.confidence,
+            audio_sim: candidate.confidence,
+            text_sim: candidate.confidence,
+            scene_sim: candidate.confidence,
+            reason: candidate.reason,
+          },
+          { onConflict: "weekly_drop_id,genre_id,position" }
+        );
 
       if (!insertError) inserted += 1;
       else console.error("[Curator] insert weekly_drop_track failed", insertError);
