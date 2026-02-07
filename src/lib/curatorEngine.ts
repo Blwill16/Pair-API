@@ -249,7 +249,7 @@ async function getUserPreferredGenres(userId: string): Promise<string[]> {
   return Array.from(new Set(preferred));
 }
 
-async function getExclusionSet(userId: string): Promise<Set<string>> {
+async function getExclusionSet(userId: string, includeSurfaced: boolean): Promise<Set<string>> {
   const excluded = new Set<string>();
 
   const { data: owned } = await supabase
@@ -270,14 +270,16 @@ async function getExclusionSet(userId: string): Promise<Set<string>> {
     if (row.apple_music_id) excluded.add(row.apple_music_id);
   }
 
-  const { data: surfaced } = await supabase
-    .from("weekly_drop_tracks")
-    .select("pair_tracks!inner(apple_music_id),weekly_drops!inner(user_id)")
-    .eq("weekly_drops.user_id", userId);
+  if (includeSurfaced) {
+    const { data: surfaced } = await supabase
+      .from("weekly_drop_tracks")
+      .select("pair_tracks!inner(apple_music_id),weekly_drops!inner(user_id)")
+      .eq("weekly_drops.user_id", userId);
 
-  for (const row of surfaced || []) {
-    const track = row.pair_tracks as unknown as { apple_music_id?: string };
-    if (track?.apple_music_id) excluded.add(track.apple_music_id);
+    for (const row of surfaced || []) {
+      const track = row.pair_tracks as unknown as { apple_music_id?: string };
+      if (track?.apple_music_id) excluded.add(track.apple_music_id);
+    }
   }
 
   return excluded;
@@ -512,9 +514,8 @@ export async function generateWeeklyDrop(userId: string, preferredGenres?: strin
   }
 
   try {
-    const [genres, exclusions, topArtists] = await Promise.all([
+    const [genres, topArtists] = await Promise.all([
       ensureCuratedGenres(),
-      getExclusionSet(userId),
       getTopArtists(userId),
     ]);
 
@@ -528,10 +529,22 @@ export async function generateWeeklyDrop(userId: string, preferredGenres?: strin
       return { ...(drop as WeeklyDrop), status: "empty", total_tracks: 0 };
     }
 
-    const filtered = releases.filter((track) => !exclusions.has(track.apple_music_id));
+    const preferredSlugs = getPreferredBroadGenreSlugs(mergedPreferredGenres);
+    const targetGenreCount = Math.max(preferredSlugs.length, 1);
+    const targetMinCount = targetGenreCount * MIN_TRACKS_PER_GENRE;
+
+    const strictExclusions = await getExclusionSet(userId, true);
+    const relaxedExclusions = await getExclusionSet(userId, false);
+    let filtered = releases.filter((track) => !strictExclusions.has(track.apple_music_id));
+
+    if (filtered.length < targetMinCount) {
+      const strictCount = filtered.length;
+      filtered = releases.filter((track) => !relaxedExclusions.has(track.apple_music_id));
+      console.log(`[Curator] relaxed_exclusions=true strict=${strictCount} relaxed=${filtered.length} target_min=${targetMinCount}`);
+    }
 
     console.log(
-      `[Curator] user=${userId} week=${weekStartDate} filtered=${filtered.length} excluded=${releases.length - filtered.length}`
+      `[Curator] user=${userId} week=${weekStartDate} filtered=${filtered.length} excluded=${releases.length - filtered.length} target_min=${targetMinCount}`
     );
 
     if (filtered.length === 0) {
