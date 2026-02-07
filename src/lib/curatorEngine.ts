@@ -459,10 +459,11 @@ function selectTracksByGenre(
         if (genrePicks.length >= MIN_TRACKS_PER_GENRE) break;
         if (genrePicks.some((p) => p.track.apple_music_id === candidate.track.apple_music_id)) continue;
         const artistKey = getArtistKey(candidate.track);
-        const globalCount = globalArtistCounts[artistKey] || 0;
-        if (globalCount >= MAX_TRACKS_PER_ARTIST_GLOBAL) continue;
+        const perGenreCount = artistCounts[artistKey] || 0;
+        if (perGenreCount >= MAX_TRACKS_PER_ARTIST_PER_GENRE) continue;
         genrePicks.push(candidate);
-        globalArtistCounts[artistKey] = globalCount + 1;
+        artistCounts[artistKey] = perGenreCount + 1;
+        globalArtistCounts[artistKey] = (globalArtistCounts[artistKey] || 0) + 1;
       }
     }
 
@@ -519,7 +520,7 @@ export async function generateWeeklyDrop(userId: string, preferredGenres?: strin
 
     const genreBySlug = new Map(genres.map((g) => [g.slug, g]));
 
-    const releases = await getAppleMusicNewReleases(400);
+    const releases = await getAppleMusicNewReleases(400, mergedPreferredGenres);
     console.log(`[Curator] user=${userId} week=${weekStartDate} releases=${releases.length}`);
 
     if (releases.length === 0) {
@@ -596,7 +597,14 @@ export async function generateWeeklyDrop(userId: string, preferredGenres?: strin
     const status = inserted > 0 ? "generated" : "empty";
     await supabase.from("weekly_drops").update({ status, total_tracks: inserted }).eq("id", drop.id);
 
-    console.log(`[Curator] user=${userId} week=${weekStartDate} selected=${selected.length} inserted=${inserted}`);
+    const selectedByGenre = selected.reduce<Record<string, number>>((acc, row) => {
+      const slug = row.mappedGenre.slug || "other";
+      acc[slug] = (acc[slug] || 0) + 1;
+      return acc;
+    }, {});
+    console.log(
+      `[Curator] user=${userId} week=${weekStartDate} selected=${selected.length} inserted=${inserted} by_genre=${JSON.stringify(selectedByGenre)}`
+    );
 
     return {
       ...(drop as WeeklyDrop),

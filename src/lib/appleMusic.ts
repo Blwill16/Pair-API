@@ -105,6 +105,73 @@ export interface PairTrack {
   mood_tags?: string[];
 }
 
+function canonicalizeGenreToken(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/&/g, "and")
+    .replace(/[\/_-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildWeeklyGenreSearchQueries(preferredGenres: string[]): string[] {
+  const base = (preferredGenres || [])
+    .map(canonicalizeGenreToken)
+    .filter(Boolean);
+
+  const queries: string[] = [];
+  const push = (q: string) => {
+    const trimmed = q.trim();
+    if (!trimmed) return;
+    if (!queries.includes(trimmed)) queries.push(trimmed);
+  };
+
+  for (const genre of base) {
+    if (genre.includes("hip hop") || genre.includes("rap")) {
+      push("new hip hop");
+      push("new rap");
+      continue;
+    }
+    if (genre.includes("rnb") || genre.includes("rhythm and blues") || genre.includes("soul")) {
+      push("new rnb");
+      push("new soul");
+      continue;
+    }
+    if (genre.includes("electronic") || genre.includes("dance") || genre.includes("edm")) {
+      push("new electronic");
+      push("new dance");
+      push("new edm");
+      continue;
+    }
+    if (genre.includes("country") || genre.includes("folk")) {
+      push("new country");
+      push("new folk");
+      continue;
+    }
+    if (genre.includes("indie") || genre.includes("alternative")) {
+      push("new indie");
+      push("new alternative");
+      continue;
+    }
+    if (genre.includes("pop")) {
+      push("new pop");
+      continue;
+    }
+    if (genre.includes("rock")) {
+      push("new rock");
+      continue;
+    }
+    if (genre.includes("latin") || genre.includes("global")) {
+      push("new latin");
+      continue;
+    }
+
+    push(`new ${genre}`);
+  }
+
+  return queries.slice(0, 12);
+}
+
 // Mock Apple Music data for development (similar to MOCK_SPOTIFY mode)
 const MOCK_APPLE_MUSIC = process.env.MOCK_APPLE_MUSIC === "true";
 
@@ -1028,7 +1095,7 @@ function getWeekStartDate(): Date {
  * Weekly window: Thursday 10pm Phoenix to next Thursday 9:59pm Phoenix
  * If no tracks pass the filter, returns empty array (do NOT backfill old tracks)
  */
-export async function getAppleMusicNewReleases(limit: number = 100): Promise<PairTrack[]> {
+export async function getAppleMusicNewReleases(limit: number = 100, preferredGenres: string[] = []): Promise<PairTrack[]> {
   if (MOCK_APPLE_MUSIC) {
     console.log("[New Releases] MOCK mode - returning mock tracks as new releases");
     return mockAppleMusicTracks.slice(0, limit);
@@ -1148,7 +1215,6 @@ export async function getAppleMusicNewReleases(limit: number = 100): Promise<Pai
     }
 
     // STRATEGY 3: Search for recent releases (supplementary)
-    // Only if we don't have enough candidates yet
     if (candidates.length < limit / 2) {
       const currentYear = new Date().getFullYear();
       const searchQueries = [
@@ -1164,6 +1230,22 @@ export async function getAppleMusicNewReleases(limit: number = 100): Promise<Pai
         const results = await searchAppleMusicTracks(query, 25);
         totalFetched += results.length;
         
+        for (const track of results) {
+          if (addCandidate(track)) passedFilter++;
+        }
+      }
+    }
+
+    // STRATEGY 4: Genre-seeded searches from user preferences
+    // This improves coverage for each selected genre (e.g. Electronic, Country).
+    const genreQueries = buildWeeklyGenreSearchQueries(preferredGenres);
+    if (genreQueries.length > 0 && candidates.length < limit) {
+      console.log(`[New Releases] Genre-seeded search queries: ${genreQueries.join(" | ")}`);
+      for (const query of genreQueries) {
+        if (candidates.length >= limit) break;
+        console.log(`[New Releases] Genre search: "${query}"`);
+        const results = await searchAppleMusicTracks(query, 25);
+        totalFetched += results.length;
         for (const track of results) {
           if (addCandidate(track)) passedFilter++;
         }
