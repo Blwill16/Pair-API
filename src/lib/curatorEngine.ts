@@ -807,7 +807,7 @@ export async function generateWeeklyDrop(userId: string, preferredGenres?: strin
     // Normalize preferred genres for matching
     const normalizedPreferredGenres = preferredGenres?.map(g => g.toLowerCase()) || [];
     
-    const filteredCandidates = newReleases.filter(track => {
+    let filteredCandidates = newReleases.filter(track => {
       // Exclude if already owned
       if (exclusions.has(track.apple_music_id)) return false;
       
@@ -848,6 +848,7 @@ export async function generateWeeklyDrop(userId: string, preferredGenres?: strin
         if (fingerprint.doNotServe.trackIds.includes(track.apple_music_id)) return false;
         return true;
       });
+      filteredCandidates = allCandidates;
       console.log(`[Curator V2] ${allCandidates.length} candidates without genre filter`);
     }
     
@@ -1241,15 +1242,19 @@ async function updateDropStatus(dropId: string, status: string): Promise<void> {
  */
 function getWeekFriday(): string {
   const now = new Date();
-  const dayOfWeek = now.getDay(); // 0 = Sunday, 5 = Friday
-  
-  // Calculate days since last Friday
-  // If today is Friday (5), use today
-  let daysToSubtract = (dayOfWeek - 5 + 7) % 7;
-  
-  const friday = new Date(now);
-  friday.setDate(now.getDate() - daysToSubtract);
-  return friday.toISOString().split('T')[0];
+  const phoenixOffsetMinutes = -7 * 60;
+  const phoenixNow = new Date(now.getTime() + (now.getTimezoneOffset() + phoenixOffsetMinutes) * 60000);
+
+  const dayOfWeek = phoenixNow.getDay();
+  const daysToSubtract = (dayOfWeek - 5 + 7) % 7;
+
+  const friday = new Date(phoenixNow);
+  friday.setDate(phoenixNow.getDate() - daysToSubtract);
+
+  const year = friday.getFullYear();
+  const month = String(friday.getMonth() + 1).padStart(2, "0");
+  const day = String(friday.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 // ============================================================================
