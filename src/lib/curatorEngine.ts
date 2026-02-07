@@ -34,9 +34,9 @@ export interface WeeklyDropTrack {
   genre?: CuratedGenre;
 }
 
-const MAX_WEEKLY_TRACKS = 5;
-const MIN_WEEKLY_TRACKS = 3;
-const MAX_TRACKS_PER_ARTIST = 2;
+const MIN_TRACKS_PER_GENRE = 3;
+const MAX_TRACKS_PER_GENRE = 4;
+const MAX_TRACKS_PER_ARTIST_PER_GENRE = 2;
 
 const BROAD_GENRES: Array<{
   slug: string;
@@ -137,6 +137,25 @@ function matchesGenreKeyword(trackGenre: string, preferredGenre: string): boolea
     trackGenre.includes(preferredGenre) ||
     preferredGenre.includes(trackGenre)
   );
+}
+
+function getPreferredBroadGenreSlugs(preferredGenres: string[]): string[] {
+  if (!preferredGenres.length) return [];
+
+  const normalized = preferredGenres.map((g) => g.toLowerCase().trim()).filter(Boolean);
+  const slugs: string[] = [];
+
+  for (const broad of BROAD_GENRES) {
+    if (broad.slug === "other") continue;
+    const matched = normalized.some((pg) =>
+      matchesGenreKeyword(broad.slug, pg) ||
+      matchesGenreKeyword(broad.display_name.toLowerCase(), pg) ||
+      broad.keywords.some((kw) => matchesGenreKeyword(kw, pg))
+    );
+    if (matched) slugs.push(broad.slug);
+  }
+
+  return Array.from(new Set(slugs));
 }
 
 async function ensureCuratedGenres(): Promise<CuratedGenre[]> {
@@ -365,29 +384,57 @@ async function upsertPairTrack(track: PairTrack): Promise<string | null> {
   return inserted.id;
 }
 
-function selectTracks(scored: ScoredRelease[]): ScoredRelease[] {
-  const selected: ScoredRelease[] = [];
-  const artistCounts: Record<string, number> = {};
-
+function selectTracksByGenre(
+  scored: ScoredRelease[],
+  preferredGenres: string[]
+): ScoredRelease[] {
+  const grouped: Record<string, ScoredRelease[]> = {};
   for (const candidate of scored) {
-    if (selected.length >= MAX_WEEKLY_TRACKS) break;
-
-    const artistKey = getArtistKey(candidate.track);
-    const artistCount = artistCounts[artistKey] || 0;
-
-    if (artistCount >= MAX_TRACKS_PER_ARTIST) continue;
-
-    selected.push(candidate);
-    artistCounts[artistKey] = artistCount + 1;
+    const slug = candidate.mappedGenre.slug || "other";
+    if (!grouped[slug]) grouped[slug] = [];
+    grouped[slug].push(candidate);
   }
 
-  // Relax artist limit if we still do not have enough tracks.
-  if (selected.length < MIN_WEEKLY_TRACKS) {
-    for (const candidate of scored) {
-      if (selected.length >= MIN_WEEKLY_TRACKS) break;
-      if (selected.some((s) => s.track.apple_music_id === candidate.track.apple_music_id)) continue;
-      selected.push(candidate);
+  const preferredSlugs = getPreferredBroadGenreSlugs(preferredGenres);
+
+  let targetSlugs = preferredSlugs.filter((slug) => (grouped[slug] || []).length > 0);
+
+  if (targetSlugs.length === 0) {
+    targetSlugs = Object.entries(grouped)
+      .filter(([slug]) => slug !== "other")
+      .sort((a, b) => b[1].length - a[1].length)
+      .slice(0, 3)
+      .map(([slug]) => slug);
+  }
+
+  const selected: ScoredRelease[] = [];
+
+  for (const slug of targetSlugs) {
+    const candidates = grouped[slug] || [];
+    if (!candidates.length) continue;
+
+    const genrePicks: ScoredRelease[] = [];
+    const artistCounts: Record<string, number> = {};
+
+    for (const candidate of candidates) {
+      if (genrePicks.length >= MAX_TRACKS_PER_GENRE) break;
+      const artistKey = getArtistKey(candidate.track);
+      const count = artistCounts[artistKey] || 0;
+      if (count >= MAX_TRACKS_PER_ARTIST_PER_GENRE) continue;
+      genrePicks.push(candidate);
+      artistCounts[artistKey] = count + 1;
     }
+
+    // If artist cap prevents us from getting enough tracks, relax it for this genre.
+    if (genrePicks.length < MIN_TRACKS_PER_GENRE) {
+      for (const candidate of candidates) {
+        if (genrePicks.length >= MIN_TRACKS_PER_GENRE) break;
+        if (genrePicks.some((p) => p.track.apple_music_id === candidate.track.apple_music_id)) continue;
+        genrePicks.push(candidate);
+      }
+    }
+
+    selected.push(...genrePicks);
   }
 
   return selected;
@@ -472,7 +519,7 @@ export async function generateWeeklyDrop(userId: string, preferredGenres?: strin
       })
       .sort((a, b) => b.confidence - a.confidence);
 
-    const selected = selectTracks(scored);
+    const selected = selectTracksByGenre(scored, mergedPreferredGenres);
 
     if (selected.length === 0) {
       await supabase.from("weekly_drops").update({ status: "empty", total_tracks: 0 }).eq("id", drop.id);
@@ -482,16 +529,22 @@ export async function generateWeeklyDrop(userId: string, preferredGenres?: strin
     await supabase.from("weekly_drop_tracks").delete().eq("weekly_drop_id", drop.id);
 
     let inserted = 0;
+    const positionByGenre: Record<string, number> = {};
+
     for (let i = 0; i < selected.length; i++) {
       const candidate = selected[i];
       const trackId = await upsertPairTrack(candidate.track);
       if (!trackId) continue;
 
+      const genreSlug = candidate.mappedGenre.slug || "other";
+      const nextPosition = (positionByGenre[genreSlug] || 0) + 1;
+      positionByGenre[genreSlug] = nextPosition;
+
       const { error: insertError } = await supabase.from("weekly_drop_tracks").insert({
         weekly_drop_id: drop.id,
         genre_id: candidate.mappedGenre.id,
         track_id: trackId,
-        position: i + 1,
+        position: nextPosition,
         confidence: candidate.confidence,
         audio_sim: candidate.confidence,
         text_sim: candidate.confidence,
