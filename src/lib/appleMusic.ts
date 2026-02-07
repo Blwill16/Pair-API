@@ -4,6 +4,8 @@
 
 import * as jose from 'jose';
 
+const APPLE_SEARCH_MAX_LIMIT = 25;
+
 // Apple Music Developer Token generation
 let cachedToken: { token: string; expiresAt: number } | null = null;
 
@@ -461,13 +463,15 @@ const mockAppleMusicTracks: PairTrack[] = [
 ];
 
 export async function searchAppleMusicTracks(query: string, limit: number = 20): Promise<PairTrack[]> {
+  const safeLimit = Math.max(1, Math.min(limit, APPLE_SEARCH_MAX_LIMIT));
+
   if (MOCK_APPLE_MUSIC) {
     const lowerQuery = query.toLowerCase();
     return mockAppleMusicTracks.filter(
       (track) =>
         track.track_name.toLowerCase().includes(lowerQuery) ||
         track.artist_name.toLowerCase().includes(lowerQuery)
-    ).slice(0, limit);
+    ).slice(0, safeLimit);
   }
 
   // Get developer token (generated dynamically from private key)
@@ -478,7 +482,7 @@ export async function searchAppleMusicTracks(query: string, limit: number = 20):
   }
 
   try {
-    const searchUrl = `https://api.music.apple.com/v1/catalog/us/search?term=${encodeURIComponent(query)}&types=songs&limit=${limit}`;
+    const searchUrl = `https://api.music.apple.com/v1/catalog/us/search?term=${encodeURIComponent(query)}&types=songs&limit=${safeLimit}`;
     console.log(`Apple Music search URL: ${searchUrl}`);
     
     const response = await fetch(
@@ -1157,7 +1161,7 @@ export async function getAppleMusicNewReleases(limit: number = 100): Promise<Pai
         if (candidates.length >= limit) break;
         
         console.log(`[New Releases] Searching: "${query}"`);
-        const results = await searchAppleMusicTracks(query, 50);
+        const results = await searchAppleMusicTracks(query, 25);
         totalFetched += results.length;
         
         for (const track of results) {
