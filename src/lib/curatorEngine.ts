@@ -36,7 +36,8 @@ export interface WeeklyDropTrack {
 
 const MIN_TRACKS_PER_GENRE = 3;
 const MAX_TRACKS_PER_GENRE = 4;
-const MAX_TRACKS_PER_ARTIST_PER_GENRE = 2;
+const MAX_TRACKS_PER_ARTIST_PER_GENRE = 1;
+const MAX_TRACKS_PER_ARTIST_GLOBAL = 1;
 
 const BROAD_GENRES: Array<{
   slug: string;
@@ -408,6 +409,7 @@ function selectTracksByGenre(
   }
 
   const selected: ScoredRelease[] = [];
+  const globalArtistCounts: Record<string, number> = {};
 
   for (const slug of targetSlugs) {
     const candidates = grouped[slug] || [];
@@ -419,10 +421,13 @@ function selectTracksByGenre(
     for (const candidate of candidates) {
       if (genrePicks.length >= MAX_TRACKS_PER_GENRE) break;
       const artistKey = getArtistKey(candidate.track);
+      const globalCount = globalArtistCounts[artistKey] || 0;
+      if (globalCount >= MAX_TRACKS_PER_ARTIST_GLOBAL) continue;
       const count = artistCounts[artistKey] || 0;
       if (count >= MAX_TRACKS_PER_ARTIST_PER_GENRE) continue;
       genrePicks.push(candidate);
       artistCounts[artistKey] = count + 1;
+      globalArtistCounts[artistKey] = globalCount + 1;
     }
 
     // If artist cap prevents us from getting enough tracks, relax it for this genre.
@@ -430,7 +435,11 @@ function selectTracksByGenre(
       for (const candidate of candidates) {
         if (genrePicks.length >= MIN_TRACKS_PER_GENRE) break;
         if (genrePicks.some((p) => p.track.apple_music_id === candidate.track.apple_music_id)) continue;
+        const artistKey = getArtistKey(candidate.track);
+        const globalCount = globalArtistCounts[artistKey] || 0;
+        if (globalCount >= MAX_TRACKS_PER_ARTIST_GLOBAL) continue;
         genrePicks.push(candidate);
+        globalArtistCounts[artistKey] = globalCount + 1;
       }
     }
 
