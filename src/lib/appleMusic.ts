@@ -981,13 +981,13 @@ function getWeeklyWindow(): { start: Date; end: Date; weekId: string } {
   // Window end is 7 days later
   const endUTC = new Date(startUTC.getTime() + 7 * 24 * 60 * 60 * 1000);
   
-  // Week ID is the Friday date (for display)
+  // Week ID is the Friday date in Phoenix local date (not UTC-shifted).
   const fridayDatePhoenix = new Date(windowStart);
-fridayDatePhoenix.setDate(windowStart.getDate() + 1); // Thursday 10pm -> Friday date
-const year = fridayDatePhoenix.getFullYear();
-const month = String(fridayDatePhoenix.getMonth() + 1).padStart(2, "0");
-const day = String(fridayDatePhoenix.getDate()).padStart(2, "0");
-const weekId = `${year}-${month}-${day}`;
+  fridayDatePhoenix.setDate(windowStart.getDate() + 1); // Thursday 10pm -> Friday date
+  const year = fridayDatePhoenix.getFullYear();
+  const month = String(fridayDatePhoenix.getMonth() + 1).padStart(2, "0");
+  const day = String(fridayDatePhoenix.getDate()).padStart(2, "0");
+  const weekId = `${year}-${month}-${day}`;
   
   return { start: startUTC, end: endUTC, weekId };
 }
@@ -997,15 +997,15 @@ const weekId = `${year}-${month}-${day}`;
  * STRICT: Only returns true if release_date is within this week's window
  */
 function isWithinWeeklyWindow(releaseDate: string | undefined): boolean {
- if (!releaseDate) return false;
-
-// Apple Music release dates are day-only strings (YYYY-MM-DD).
-// Compare by local Friday-date window to avoid UTC hour cutoff dropping Friday releases.
-const { weekId } = getWeeklyWindow(); // Friday date string for current week in Phoenix
-const weekStart = new Date(`${weekId}T00:00:00Z`);
-const weekEnd = new Date(weekStart.getTime() + 7 * 24 * 60 * 60 * 1000);
-const release = new Date(`${releaseDate}T00:00:00Z`);
-return release >= weekStart && release < weekEnd;
+  if (!releaseDate) return false;
+  
+  // Apple Music release dates are day-only strings (YYYY-MM-DD).
+  // Compare by local Friday-date window to avoid UTC hour cutoff dropping Friday releases.
+  const { weekId } = getWeeklyWindow(); // Friday date string for current week in Phoenix
+  const weekStart = new Date(`${weekId}T00:00:00Z`);
+  const weekEnd = new Date(weekStart.getTime() + 7 * 24 * 60 * 60 * 1000);
+  const release = new Date(`${releaseDate}T00:00:00Z`);
+  return release >= weekStart && release < weekEnd;
 }
 
 /**

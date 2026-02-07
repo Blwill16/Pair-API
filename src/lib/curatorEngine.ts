@@ -84,6 +84,9 @@ const ADVENTURE_CONFIDENCE_THRESHOLD = 0.45;
 // V2: Total tracks for the week (not per genre)
 const MAX_WEEKLY_TRACKS = 6;
 const MIN_WEEKLY_TRACKS = 3;
+const MAX_TRACKS_PER_ARTIST = 1;
+const MAX_TRACKS_PER_GENRE = 2;
+const MIN_DISTINCT_GENRES = 3;
 
 // Legacy scoring weights (kept for backward compatibility)
 const WEIGHTS = {
@@ -878,20 +881,48 @@ export async function generateWeeklyDrop(userId: string, preferredGenres?: strin
     // ========================================================================
     console.log(`[Curator V2] Step 5: Selecting top ${MIN_WEEKLY_TRACKS}-${MAX_WEEKLY_TRACKS} tracks...`);
     
-    // Ensure artist diversity - max 2 tracks per artist
+    // Ensure diversity: max 1 track per artist, max 2 per genre,
+    // and try to hit at least 3 distinct genres when candidates allow it.
     const selectedTracks: Array<{ track: PairTrack; score: CandidateScore }> = [];
     const artistCounts: Record<string, number> = {};
-    
+    const genreCounts: Record<string, number> = {};
+
+    // Pass 1: prioritize genre diversity.
     for (const candidate of scoredCandidates) {
       if (selectedTracks.length >= MAX_WEEKLY_TRACKS) break;
-      
+
       const artist = candidate.track.artist_name.toLowerCase();
-      const currentCount = artistCounts[artist] || 0;
-      
-      if (currentCount < 2) {
-        selectedTracks.push(candidate);
-        artistCounts[artist] = currentCount + 1;
-      }
+      const genre = assignToBroadGenre(candidate.track);
+      const artistCount = artistCounts[artist] || 0;
+      const currentGenreCount = genreCounts[genre.slug] || 0;
+      const distinctGenres = Object.keys(genreCounts).length;
+      const needsNewGenre = distinctGenres < MIN_DISTINCT_GENRES;
+
+      if (artistCount >= MAX_TRACKS_PER_ARTIST) continue;
+      if (currentGenreCount >= MAX_TRACKS_PER_GENRE) continue;
+      if (needsNewGenre && currentGenreCount > 0) continue;
+
+      selectedTracks.push(candidate);
+      artistCounts[artist] = artistCount + 1;
+      genreCounts[genre.slug] = currentGenreCount + 1;
+    }
+
+    // Pass 2: fill remaining slots while keeping artist/genre caps.
+    for (const candidate of scoredCandidates) {
+      if (selectedTracks.length >= MAX_WEEKLY_TRACKS) break;
+      if (selectedTracks.some(s => s.track.apple_music_id === candidate.track.apple_music_id)) continue;
+
+      const artist = candidate.track.artist_name.toLowerCase();
+      const genre = assignToBroadGenre(candidate.track);
+      const artistCount = artistCounts[artist] || 0;
+      const currentGenreCount = genreCounts[genre.slug] || 0;
+
+      if (artistCount >= MAX_TRACKS_PER_ARTIST) continue;
+      if (currentGenreCount >= MAX_TRACKS_PER_GENRE) continue;
+
+      selectedTracks.push(candidate);
+      artistCounts[artist] = artistCount + 1;
+      genreCounts[genre.slug] = currentGenreCount + 1;
     }
     
     console.log(`[Curator V2] Selected ${selectedTracks.length} tracks for the week`);
@@ -901,11 +932,18 @@ export async function generateWeeklyDrop(userId: string, preferredGenres?: strin
       console.log(`[Curator V2] Not enough high-conviction tracks (${selectedTracks.length}/${MIN_WEEKLY_TRACKS})`);
       console.log(`[Curator V2] Falling back to chart/popular tracks for new user experience`);
       
-      // Use the first N tracks from new releases (which includes chart tracks)
-      // These are already sorted by popularity/relevance from Apple Music
-      const fallbackTracks = filteredCandidates.slice(0, MAX_WEEKLY_TRACKS);
+      // Use top filtered tracks, while preserving diversity constraints.
+      const fallbackTracks = filteredCandidates.slice(0, MAX_WEEKLY_TRACKS * 4);
       
       for (const track of fallbackTracks) {
+        const artist = track.artist_name.toLowerCase();
+        const genre = assignToBroadGenre(track);
+        const artistCount = artistCounts[artist] || 0;
+        const currentGenreCount = genreCounts[genre.slug] || 0;
+
+        if (artistCount >= MAX_TRACKS_PER_ARTIST) continue;
+        if (currentGenreCount >= MAX_TRACKS_PER_GENRE) continue;
+
         // Check if already selected
         if (!selectedTracks.some(s => s.track.apple_music_id === track.apple_music_id)) {
           selectedTracks.push({
@@ -919,6 +957,8 @@ export async function generateWeeklyDrop(userId: string, preferredGenres?: strin
               reason: 'Popular new release this week'
             }
           });
+          artistCounts[artist] = artistCount + 1;
+          genreCounts[genre.slug] = currentGenreCount + 1;
         }
         if (selectedTracks.length >= MAX_WEEKLY_TRACKS) break;
       }
@@ -1241,13 +1281,13 @@ async function updateDropStatus(dropId: string, status: string): Promise<void> {
  * Get current week's Friday date (most recent Friday, or today if Friday)
  */
 function getWeekFriday(): string {
+  // Align week key with Apple weekly window (Phoenix local drop timing).
   const now = new Date();
   const phoenixOffsetMinutes = -7 * 60;
   const phoenixNow = new Date(now.getTime() + (now.getTimezoneOffset() + phoenixOffsetMinutes) * 60000);
 
-  const dayOfWeek = phoenixNow.getDay();
-  const daysToSubtract = (dayOfWeek - 5 + 7) % 7;
-
+  const dayOfWeek = phoenixNow.getDay(); // 0 = Sunday, 5 = Friday
+  let daysToSubtract = (dayOfWeek - 5 + 7) % 7;
   const friday = new Date(phoenixNow);
   friday.setDate(phoenixNow.getDate() - daysToSubtract);
 
