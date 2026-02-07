@@ -142,7 +142,9 @@ function getArtistKey(track: PairTrack): string {
   return (track.artist_name || "")
     .toLowerCase()
     .replace(/\s+(feat\.|featuring|ft\.).*$/i, "")
+    .replace(/\s*&\s+.*$/i, "")
     .replace(/\s+x\s+.*$/i, "")
+    .replace(/\s+and\s+.*$/i, "")
     .replace(/[|,;].*$/, "")
     .trim();
 }
