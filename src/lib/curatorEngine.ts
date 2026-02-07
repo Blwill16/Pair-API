@@ -416,6 +416,10 @@ function selectTracksByGenre(
   }
 
   const preferredSlugs = getPreferredBroadGenreSlugs(preferredGenres);
+  const groupedSummary = Object.entries(grouped)
+    .map(([slug, tracks]) => `${slug}:${tracks.length}`)
+    .join(", ");
+  console.log(`[Curator] grouped_candidates=${groupedSummary || "none"} preferred_slugs=${preferredSlugs.join(",") || "none"}`);
 
   let targetSlugs = preferredSlugs;
 
@@ -425,6 +429,7 @@ function selectTracksByGenre(
       .sort((a, b) => b[1].length - a[1].length)
       .map(([slug]) => slug);
   }
+  console.log(`[Curator] target_slugs=${targetSlugs.join(",") || "none"}`);
 
   const selected: ScoredRelease[] = [];
   const globalArtistCounts: Record<string, number> = {};
